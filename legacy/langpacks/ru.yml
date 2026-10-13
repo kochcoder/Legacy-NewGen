@@ -511,6 +511,8 @@ loader:
   add_repo_config_doc: "Дополнительные репозитории"
   avail_header: "🎢 <b>Официальные модули из репозитория</b>"
   no_module: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Модуль {} недоступен в репозитории.</b>"
+  not_module_source: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Ссылка вернула веб-страницу вместо исходника модуля:</b>
+<code>{}</code>"
   no_file: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Файл не найден</b>"
   provide_module: "<emoji document_id=5312383351217201533>⚠️</emoji> <b>Укажи модуль для загрузки</b>"
   bad_unicode: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Неверная кодировка модуля</b>"

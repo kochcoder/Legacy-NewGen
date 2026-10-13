@@ -527,6 +527,8 @@ loader:
   repo_config_doc: "URL to a module repo"
   avail_header: "🎢 <b>Modules from repo</b>"
   no_module: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Module {} is not available in repo.</b>"
+  not_module_source: "<emoji document_id=5210952531676504517>🚫</emoji> <b>URL returned a web page instead of the module source:</b>
+<code>{}</code>"
   no_file: "<emoji document_id=5210952531676504517>🚫</emoji> <b>File not found</b>"
   provide_module: "<emoji document_id=5312383351217201533>⚠️</emoji> <b>Provide a module to load</b>"
   bad_unicode: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Invalid Unicode formatting in module</b>"

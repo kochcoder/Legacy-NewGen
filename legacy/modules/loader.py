@@ -303,6 +303,16 @@ class LoaderMod(loader.Module):
 
                     buff.append(MODULE_LOADING_FAILED)
                     continue
+                except ValueError as e:
+                    if message is not None:
+                        output.append(
+                            self.strings("not_module_source").format(
+                                utils.escape_html(str(e))
+                            )
+                        )
+
+                    buff.append(MODULE_LOADING_FAILED)
+                    continue
 
                 output.append(
                     await self.load_module(

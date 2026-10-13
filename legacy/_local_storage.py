@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 MAX_FILESIZE = 1024 * 1024 * 5  # 5 MB
 MAX_TOTALSIZE = 1024 * 1024 * 100  # 100 MB
 
+_HTML_HEADS = ("<!doctype html", "<html")
+
+
+def _is_html_response(r: "requests.Response") -> bool:
+    """Checks whether the host returned a web page instead of the source"""
+    if "text/html" in (r.headers.get("content-type") or "").lower():
+        return True
+
+    head = r.text.lstrip()[:32].lower()
+    return any(head.startswith(marker) for marker in _HTML_HEADS)
+
 
 class LocalStorage:
     """Saves modules to disk and fetches them if remote storage is not available."""
@@ -54,6 +65,14 @@ class LocalStorage:
         :param module_name: Module name.
         :param module_code: Module source code.
         """
+        if module_code.lstrip()[:32].lower().startswith(_HTML_HEADS):
+            logger.warning(
+                "Refusing to cache an HTML page as module %s from %s",
+                module_name,
+                repo,
+            )
+            return
+
         size = len(module_code)
         if size > MAX_FILESIZE:
             logger.warning(
@@ -139,19 +158,47 @@ class RemoteStorage:
         :return: Module source code.
         """
         url, repo, module_name = self._parse_url(url)
-        try:
-            r = await utils.run_sync(
+
+        def _request(user_agent: typing.Optional[str]):
+            return utils.run_sync(
                 requests.get,
                 url,
                 auth=(tuple(auth.split(":", 1)) if auth else None),
                 headers={
-                    "User-Agent": "Legacy Userbot",
+                    **({"User-Agent": user_agent} if user_agent else {}),
                     "X-Legacy-Version": __version__,
                     "X-Legacy-Commit-SHA": utils.get_git_hash(),
                     "X-Legacy-User": str(self._client.tg_id),
                 },
             )
+
+        html_source_error: typing.Optional[ValueError] = None
+
+        try:
+            r = await _request("Legacy Userbot")
+
+            # Some module hosts serve a viewer page instead of the raw source
+            # to unknown user agents. Retry once with the library default one
+            # before giving up
+            if _is_html_response(r):
+                logger.debug(
+                    "Module host returned an HTML page for %s, retrying with"
+                    " default user agent",
+                    url,
+                )
+                r = await _request(None)
+
             r.raise_for_status()
+
+            if not _is_html_response(r):
+                self._local_storage.save(repo, module_name, r.text)
+                return r.text
+
+            # Never fall back to the local cache for this: an HTML page must
+            # not be loaded as a module, even if an old cache entry exists
+            html_source_error = ValueError(
+                f"{url} returned an HTML page, not the module source"
+            )
         except Exception:
             logger.debug(
                 "Can't load module from remote storage. Trying local storage.",
@@ -163,6 +210,4 @@ class RemoteStorage:
 
             raise
 
-        self._local_storage.save(repo, module_name, r.text)
-
-        return r.text
+        raise html_source_error
