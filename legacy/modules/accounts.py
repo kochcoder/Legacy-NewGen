@@ -166,6 +166,7 @@ class AccountsMod(loader.Module):
 
     async def _acc_info(self, call, account_id: int):
         info = None
+        dc = "?"
         for client in self._clients():
             if getattr(client, "tg_id", None) == account_id:
                 info = self._client_info(client)
@@ -175,13 +176,20 @@ class AccountsMod(loader.Module):
         if info is None:
             await call.answer(self.strings("gone"), show_alert=True)
             return
-        text = self.strings("acc_info_text").format(
-            utils.escape_html(str(info["name"])),
-            info["id"],
-            dc,
-            self.strings("yes") if info["premium"] else self.strings("no"),
+        screen = self.inline.screen()
+        screen.add(
+            f"{screen.icon('info')} "
+            + self.strings("acc_info_text").format(
+                utils.escape_html(str(info["name"])),
+                info["id"],
+                dc,
+                self.strings("yes") if info["premium"] else self.strings("no"),
+            ).replace("\n", "<br>")
         )
-        await call.edit(text)
+        screen.keyboard(
+            [{"text": self.strings("back"), "callback": self._acc_menu, "args": (account_id,)}]
+        )
+        await call.edit(rich_html=screen)
 
     async def _acc_logout(self, call, account_id: int):
         screen = self.inline.screen()

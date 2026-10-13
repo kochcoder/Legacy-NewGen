@@ -290,7 +290,7 @@ class InlineManager(
 
         try:
             await self._bot_client.start(bot_token=self._token)
-            self.bot = TelethonBot(self._bot_client, self._client)
+            self.bot = TelethonBot(self._bot_client, self._client, self)
             self._bot = self.bot
             self._register_builtin_handlers()
             bot_me = await self._bot_client.get_me()

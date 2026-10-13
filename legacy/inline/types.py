@@ -135,12 +135,12 @@ class _MessageProxy:
         )
 
     async def edit_text(self, text: str, *, reply_markup=None, **kwargs):
-        return await self.inline_manager.bot.client.edit_message(
-            self.chat_id,
-            self.message_id,
-            text,
-            parse_mode="HTML",
-            buttons=reply_markup,
+        # Goes through TelethonBot, so dict markups get the rich upgrade
+        return await self.inline_manager.bot.edit_message_text(
+            text=text,
+            chat_id=self.chat_id,
+            message_id=self.message_id,
+            reply_markup=reply_markup,
         )
 
 

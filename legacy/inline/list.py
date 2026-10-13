@@ -19,12 +19,19 @@ import time
 import traceback
 import typing
 
+from legacytl.client.buttons import ButtonMethods
 from legacytl.errors.rpcerrorlist import FloodWaitError
 from legacytl.errors.rpcerrorlist import ChatSendInlineForbiddenError
-from legacytl.tl.types import Message
+from legacytl.tl.types import (
+    InputBotInlineMessageRichMessage,
+    InputBotInlineResult,
+    InputRichMessageHTML,
+    Message,
+)
 
 from .. import main, utils
 from ..types import LegacyReplyMarkup
+from .screens import to_rich
 from .types import InlineMessage, InlineUnit
 
 if typing.TYPE_CHECKING:
@@ -286,16 +293,33 @@ class List(InlineUnit):
         self._units[unit_id]["current_index"] = page
 
         try:
-            await self._bot_client.edit_message(
-                call.inline_message_id,
-                self.sanitise_text(
-                    self._units[unit_id]["strings"][
-                        self._units[unit_id]["current_index"]
-                    ]
-                ),
-                parse_mode="HTML",
-                buttons=self._list_markup(unit_id),
-            )
+            if self._units[unit_id].get("rich"):
+                # Rich pages are edited as rich messages
+                await self._bot_client.edit_message(
+                    call.inline_message_id,
+                    "",
+                    rich=InputRichMessageHTML(
+                        html=self._list_rich_html(
+                            self.sanitise_text(
+                                self._units[unit_id]["strings"][
+                                    self._units[unit_id]["current_index"]
+                                ]
+                            )
+                        )
+                    ),
+                    buttons=self._list_markup(unit_id),
+                )
+            else:
+                await self._bot_client.edit_message(
+                    call.inline_message_id,
+                    self.sanitise_text(
+                        self._units[unit_id]["strings"][
+                            self._units[unit_id]["current_index"]
+                        ]
+                    ),
+                    parse_mode="HTML",
+                    buttons=self._list_markup(unit_id),
+                )
             await call.answer()
         except FloodWaitError as e:
             await call.answer(
@@ -320,6 +344,14 @@ class List(InlineUnit):
             + [[{"text": "🔻 Close", "callback": callback, "args": ("close",)}]],
         )
 
+    def _list_rich_html(self: "InlineManager", text: str) -> str:
+        """List page text as rich html"""
+        return to_rich(
+            text.replace("<emoji document_id=", "<tg-emoji emoji-id=").replace(
+                "</emoji>", "</tg-emoji>"
+            )
+        )
+
     async def _list_inline_handler(self: "InlineManager", inline_query):
         for unit in self._units.copy().values():
             if (
@@ -328,23 +360,50 @@ class List(InlineUnit):
                 and unit["type"] == "list"
             ):
                 try:
-                    await inline_query.answer(
-                        [
-                            await inline_query.builder.article(
-                                title="Legacy newgen",
-                                text=(
-                                    "🌙"
-                                    if unit.get("premium_emoji_pre_edit")
-                                    else self.sanitise_text(unit["strings"][0])
-                                ),
-                                parse_mode="HTML",
-                                link_preview=False,
-                                buttons=self._list_markup(inline_query.query),
-                                id=utils.rand(20),
-                            )
-                        ],
-                        cache_time=60,
-                    )
+                    if self._rich_enabled():
+                        # Rich content, pagination stays on the keyboard
+                        markup = self._list_markup(inline_query.query)
+                        unit["rich"] = True
+                        await inline_query.answer(
+                            [
+                                InputBotInlineResult(
+                                    id=utils.rand(20),
+                                    type="article",
+                                    title="Legacy newgen",
+                                    send_message=InputBotInlineMessageRichMessage(
+                                        rich_message=InputRichMessageHTML(
+                                            html=self._list_rich_html(
+                                                self.sanitise_text(unit["strings"][0])
+                                            ),
+                                        ),
+                                        reply_markup=(
+                                            ButtonMethods.build_reply_markup(markup)
+                                            if markup
+                                            else None
+                                        ),
+                                    ),
+                                )
+                            ],
+                            cache_time=60,
+                        )
+                    else:
+                        await inline_query.answer(
+                            [
+                                await inline_query.builder.article(
+                                    title="Legacy newgen",
+                                    text=(
+                                        "🌙"
+                                        if unit.get("premium_emoji_pre_edit")
+                                        else self.sanitise_text(unit["strings"][0])
+                                    ),
+                                    parse_mode="HTML",
+                                    link_preview=False,
+                                    buttons=self._list_markup(inline_query.query),
+                                    id=utils.rand(20),
+                                )
+                            ],
+                            cache_time=60,
+                        )
                 except Exception as e:
                     if unit["uid"] in self._error_events:
                         self._error_events[unit["uid"]].set()

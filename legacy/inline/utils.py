@@ -355,6 +355,29 @@ class Utils(InlineUnit):
         """
         reply_markup = self._validate_markup(reply_markup) or []
 
+        # Plain edits with keyboard buttons are upgraded to rich screens,
+        # so the whole form flow stays in-text. Media edits can't be rich
+        if (
+            rich_html is None
+            and text is not None
+            and self._rich_enabled()
+            and not any([photo, gif, file, video, audio])
+            and reply_markup
+            and self._has_embeddable_buttons(reply_markup)
+        ):
+            screen = self.screen()
+
+            if text:
+                screen.add(
+                    *text.replace("<emoji document_id=", "<tg-emoji emoji-id=")
+                    .replace("</emoji>", "</tg-emoji>")
+                    .splitlines()
+                )
+
+            screen.keyboard(*reply_markup)
+            rich_html = screen
+            text = None
+
         screen = None
         rich_source = None
         if rich_html is not None:

@@ -773,6 +773,19 @@ class Screens:
         """
         return bool(self._db.get("legacy.inline", "rich_mode", True))
 
+    def _has_embeddable_buttons(self: "InlineManager", markup: typing.Any) -> bool:
+        """Checks whether a dict markup holds buttons, which can live in text"""
+        if not isinstance(markup, list):
+            return False
+
+        return any(
+            isinstance(button, dict)
+            and any(key in button for key in ("callback", "action", "url", "copy"))
+            for row in markup
+            if isinstance(row, list)
+            for button in row
+        )
+
     async def show(self: "InlineManager", call: typing.Any, screen: Screen) -> bool:
         """Edit the unit of `call` to `screen` and answer with its toast"""
 

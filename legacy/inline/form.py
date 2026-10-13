@@ -298,6 +298,29 @@ class Form(InlineUnit):
 
         perms_map = None if manual_security else self._find_caller_sec_map()
 
+        # Plain forms with keyboard buttons are upgraded to rich screens,
+        # so every form renders its buttons in-text instead of a bottom
+        # keyboard. Media forms can't be rich, they are left as is
+        if (
+            rich_html is None
+            and self._rich_enabled()
+            and not any([photo, gif, file, video, audio, location])
+            and reply_markup
+            and self._has_embeddable_buttons(reply_markup)
+        ):
+            screen = self.screen()
+
+            if text:
+                screen.add(
+                    *text.replace("<emoji document_id=", "<tg-emoji emoji-id=")
+                    .replace("</emoji>", "</tg-emoji>")
+                    .splitlines()
+                )
+
+            screen.keyboard(*reply_markup)
+            rich_html = screen
+            text = None
+
         screen = None
         if rich_html is not None:
             from .screens import Screen

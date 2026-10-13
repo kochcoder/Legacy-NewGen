@@ -1,3 +1,4 @@
+import contextlib
 import io
 import re
 import typing
@@ -9,7 +10,7 @@ from legacytl.tl.functions.messages import (
     EditInlineBotMessageRequest,
     SetInlineBotResultsRequest,
 )
-from legacytl.tl.types import DocumentAttributeAudio
+from legacytl.tl.types import DocumentAttributeAudio, InputRichMessageHTML
 from legacytl.tl import TLObject
 
 # Mirrors the extensions `legacytl.utils.is_image` accepts
@@ -17,12 +18,46 @@ IMAGE_EXTENSION_PATTERN = re.compile(r"\.(?:png|jpe?g)$", re.IGNORECASE)
 
 
 class TelethonBot:
-    def __init__(self, client, emoji_client=None):
+    def __init__(self, client, emoji_client=None, inline_manager=None):
         self.client = client
         # The bot client knows nothing about premium status or settings, so the
         # userbot client is used to decide whether custom emojis have to be
         # downgraded to exteraGram links
         self._emoji_client = emoji_client or client
+        # Inline manager owns the rich switch, screens and callbacks registry
+        self._inline_manager = inline_manager
+
+    def _rich_upgrade(self, text: typing.Any, reply_markup: typing.Any):
+        """
+        Builds a rich screen out of a plain text and a dict markup, so the
+        message renders its buttons in-text instead of a bottom keyboard.
+        Returns `(html, leftover_markup)` or `None` when not applicable
+        """
+        manager = getattr(self, "_inline_manager", None)
+        if (
+            not manager
+            or not isinstance(text, str)
+            or not reply_markup
+            or not manager._rich_enabled()
+            or not manager._has_embeddable_buttons(reply_markup)
+        ):
+            return None
+
+        with contextlib.suppress(Exception):
+            markup = manager._normalize_markup(reply_markup)
+            screen = manager.screen()
+            screen.add(
+                *text.replace("<emoji document_id=", "<tg-emoji emoji-id=")
+                .replace("</emoji>", "</tg-emoji>")
+                .splitlines()
+            )
+            screen.keyboard(*markup)
+            html = screen.html()
+            # In-text taps become ordinary callbacks of the manager
+            manager._bind_screen(None, screen)
+            return html, screen.markup or None
+
+        return None
 
     def _emoji_text(self, text):
         if not isinstance(text, str):
@@ -238,6 +273,29 @@ class TelethonBot:
         disable_notification: bool | None = None,
         **kwargs,
     ):
+        if rich := self._rich_upgrade(self._emoji_text(text), reply_markup):
+            # Bot messages with buttons are upgraded to rich screens too
+            html, leftover = rich
+            return self._with_message_id_alias(
+                await self.client.send_message(
+                    chat_id,
+                    "",
+                    rich=InputRichMessageHTML(html=html),
+                    buttons=(
+                        self._inline_manager.generate_markup(leftover)
+                        if leftover
+                        else None
+                    ),
+                    silent=(
+                        disable_notification
+                        if disable_notification is not None
+                        else kwargs.get("disable_notification")
+                    ),
+                    link_preview=not kwargs.get("disable_web_page_preview", False),
+                    **self._thread_kwargs(message_thread_id),
+                )
+            )
+
         return self._with_message_id_alias(
             await self.client.send_message(
                 chat_id,
@@ -437,6 +495,22 @@ class TelethonBot:
         text = self._emoji_text(text)
 
         if inline_message_id is not None:
+            if rich := self._rich_upgrade(text, reply_markup):
+                # Bot message edits with buttons are upgraded to rich too
+                html, leftover = rich
+                inline_id = self._coerce_inline_message_id(inline_message_id)
+                return await self.client.edit_message(
+                    inline_id,
+                    "",
+                    rich=InputRichMessageHTML(html=html),
+                    link_preview=not disable_web_page_preview,
+                    buttons=(
+                        self._inline_manager.generate_markup(leftover)
+                        if leftover
+                        else None
+                    ),
+                )
+
             inline_id = self._coerce_inline_message_id(inline_message_id)
             return await self.client.edit_message(
                 inline_id,

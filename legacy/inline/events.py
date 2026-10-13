@@ -150,6 +150,49 @@ class Events(InlineUnit):
         self: "InlineManager", query: InlineQuery, res: dict
     ):
         buttons = self.generate_markup(res.get("reply_markup"))
+
+        if (
+            "message" in res
+            and self._rich_enabled()
+            and self._has_embeddable_buttons(res.get("reply_markup"))
+        ):
+            # External module results are upgraded to rich screens too,
+            # their in-text taps are ordinary callbacks
+            from legacytl.client.buttons import ButtonMethods
+            from legacytl.tl.types import (
+                InputBotInlineMessageRichMessage,
+                InputBotInlineResult,
+                InputRichMessageHTML,
+            )
+
+            screen = self.screen()
+            screen.add(
+                *self.sanitise_text(res["message"])
+                .replace("<emoji document_id=", "<tg-emoji emoji-id=")
+                .replace("</emoji>", "</tg-emoji>")
+                .splitlines()
+            )
+            screen.keyboard(*self._normalize_markup(res["reply_markup"]))
+            html = screen.html()
+            self._bind_screen(None, screen)
+
+            return InputBotInlineResult(
+                id=utils.rand(20),
+                type="article",
+                title=self.sanitise_text(res["title"]),
+                description=self.sanitise_text(res.get("description")),
+                send_message=InputBotInlineMessageRichMessage(
+                    rich_message=InputRichMessageHTML(html=html),
+                    reply_markup=(
+                        ButtonMethods.build_reply_markup(
+                            self.generate_markup(screen.markup)
+                        )
+                        if screen.markup
+                        else None
+                    ),
+                ),
+            )
+
         match True:
             case _ if "message" in res:
                 return await query.builder.article(
