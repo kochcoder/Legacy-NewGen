@@ -358,6 +358,35 @@ class LoaderMod(loader.Module):
 
         await self.load_module(doc, message)
 
+    @loader.command()
+    async def richmode(self, message: Message):
+        """[on|off] - Toggle rich rendering of inline screens"""
+        args = utils.get_args(message)
+        state = self._db.get("legacy.inline", "rich_mode", True)
+
+        if args:
+            arg = args[0].lower()
+            if arg in {"on", "yes", "true", "1"}:
+                state = True
+            elif arg in {"off", "no", "false", "0"}:
+                state = False
+            else:
+                await utils.answer(
+                    message,
+                    self.strings("richmode_invalid").format(
+                        prefix=self.get_prefix(message.sender_id)
+                    ),
+                )
+                return
+        else:
+            state = not state
+
+        self._db.set("legacy.inline", "rich_mode", state)
+        await utils.answer(
+            message,
+            self.strings("richmode_on" if state else "richmode_off"),
+        )
+
     async def approve_internal(
         self,
         call: InlineCall,

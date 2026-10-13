@@ -29,6 +29,7 @@ from legacytl.errors.rpcerrorlist import (
     MediaPrevInvalidError,
     MessageNotModifiedError,
 )
+from legacytl.tl.types import InputRichMessageHTML
 
 from .. import utils
 from ..types import LegacyReplyMarkup
@@ -375,7 +376,27 @@ class Utils(InlineUnit):
                 logger.error("`rich_html` is mutually exclusive with `text`")
                 return False
 
-            text = rich_html
+            if not self._rich_enabled() or (
+                unit_id
+                and unit_id in self._units
+                and self._units[unit_id].get("rich_failed")
+            ):
+                # Rich is off globally or has already failed for this unit:
+                # edit as a plain form with the screen converted to text
+                text, rows = self._rich_to_plain(
+                    rich_source or rich_html,
+                    {
+                        tap["_callback_data"]: tap
+                        for tap in (screen.taps.values() if screen else [])
+                    },
+                    reply_markup if isinstance(reply_markup, list) else [],
+                )
+                text = text or "­"
+                reply_markup = rows
+                rich_html = None
+                screen = None
+            else:
+                text = rich_html
 
         if text is not None and not isinstance(text, str):
             logger.error(
@@ -489,6 +510,41 @@ class Utils(InlineUnit):
                 else "audio" if audio else "video" if video else "gif" if gif else None
             )
         )
+
+        if media is None and rich_html is not None:
+            # Rich units are edited with a rich message, keeping the content
+            markup_rows = (
+                reply_markup
+                if isinstance(reply_markup, list)
+                else unit.get("buttons", [])
+            )
+            try:
+                await self._bot_client.edit_message(
+                    inline_message_id or chat_id,
+                    None if inline_message_id else message_id,
+                    "",
+                    rich=InputRichMessageHTML(html=rich_html),
+                    buttons=self.generate_markup(markup_rows),
+                )
+            except MessageNotModifiedError:
+                commit_unit_update()
+                return True
+            except FloodWaitError as e:
+                logger.info("Sleeping %ss on Telethon FloodWait...", e.seconds)
+                await asyncio.sleep(e.seconds)
+                return await self._edit_unit(**utils.get_kwargs())
+            except RPCError:
+                logger.warning(
+                    "RPCError while editing rich unit, retrying as plain",
+                    exc_info=True,
+                )
+                if query:
+                    with contextlib.suppress(Exception):
+                        await query.answer()
+                return await self._retry_plain(unit_id, utils.get_kwargs())
+            else:
+                commit_unit_update()
+                return True
 
         if media is None and text is None and reply_markup:
             try:

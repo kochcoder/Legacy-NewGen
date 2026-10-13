@@ -527,6 +527,10 @@ loader:
   repo_config_doc: "URL to a module repo"
   avail_header: "🎢 <b>Modules from repo</b>"
   no_module: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Module {} is not available in repo.</b>"
+  richmode_on: "🌙 <b>Rich rendering enabled.</b> New inline screens render as rich messages, falling back to plain text on errors"
+  richmode_off: "📃 <b>Rich rendering disabled.</b> Inline screens render as plain text with a regular keyboard"
+  richmode_invalid: "🚫 <b>Invalid argument. Use</b> <code>{prefix}richmode on|off</code>"
+  _cmd_doc_richmode: "[on|off] | Toggle rich rendering of inline screens"
   not_module_source: "<emoji document_id=5210952531676504517>🚫</emoji> <b>URL returned a web page instead of the module source:</b>
 <code>{}</code>"
   no_file: "<emoji document_id=5210952531676504517>🚫</emoji> <b>File not found</b>"

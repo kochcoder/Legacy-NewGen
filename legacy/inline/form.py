@@ -24,8 +24,15 @@ from asyncio import Event
 from urllib.parse import urlparse
 
 import grapheme
+from legacytl.client.buttons import ButtonMethods
 from legacytl.errors.rpcerrorlist import ChatSendInlineForbiddenError
-from legacytl.tl.types import InputGeoPoint, Message
+from legacytl.tl.types import (
+    InputBotInlineMessageRichMessage,
+    InputBotInlineResult,
+    InputGeoPoint,
+    InputRichMessageHTML,
+    Message,
+)
 
 from .. import main, utils
 from ..types import LegacyReplyMarkup
@@ -313,7 +320,24 @@ class Form(InlineUnit):
                 logger.error("`rich_html` is mutually exclusive with `text`")
                 return False
 
-            text = rich_html
+            if not self._rich_enabled():
+                # Rich rendering is off: degrade the screen to a plain form.
+                # In-text taps become regular keyboard buttons with the same
+                # callback data, so handlers keep working
+                text, rows = self._rich_to_plain(
+                    rich_source,
+                    {
+                        tap["_callback_data"]: tap
+                        for tap in (screen.taps.values() if screen else [])
+                    },
+                    reply_markup if isinstance(reply_markup, list) else [],
+                )
+                text = text or "­"
+                reply_markup = rows
+                rich_html = None
+                screen = None
+            else:
+                text = rich_html
 
         if not reply_markup and not ttl:
             logger.debug("Patching form reply markup with empty data")
@@ -448,12 +472,14 @@ class Form(InlineUnit):
             if needs_premium_emoji_pre_edit:
                 await asyncio.sleep(0.3)
             if not await msg.edit(
-                text,
+                # A rich screen is re-applied as rich, not as its html text
+                None if screen is not None else text,
                 reply_markup=(
                     base_reply_markup
                     if not isinstance(base_reply_markup, Placeholder)
                     else reply_markup
                 ),
+                **({"rich_html": screen} if screen is not None else {}),
             ):
                 with contextlib.suppress(Exception):
                     await msg.delete()
@@ -514,6 +540,30 @@ class Form(InlineUnit):
         form_text = "🌙" if form.get("premium_emoji_pre_edit") else form.get("text")
         try:
             match True:
+                case _ if form.get("rich_html") is not None:
+                    # Rich screens are delivered as a rich inline result;
+                    # the in-text taps are already registered as callbacks
+                    markup = self.generate_markup(inline_query.query)
+                    await inline_query.answer(
+                        [
+                            InputBotInlineResult(
+                                id=utils.rand(20),
+                                type="article",
+                                title="Legacy newgen",
+                                send_message=InputBotInlineMessageRichMessage(
+                                    rich_message=InputRichMessageHTML(
+                                        html=form["rich_html"],
+                                    ),
+                                    reply_markup=(
+                                        ButtonMethods.build_reply_markup(markup)
+                                        if markup
+                                        else None
+                                    ),
+                                ),
+                            )
+                        ],
+                        cache_time=0,
+                    )
                 case _ if "photo" in form:
                     await inline_query.answer(
                         [

@@ -638,6 +638,14 @@ class Screens:
         me = getattr(self._client, "legacy_me", None)
         return bool(getattr(me, "premium", False)) and CUSTOM_EMOJIS
 
+    def _rich_enabled(self: "InlineManager") -> bool:
+        """
+        Global rich/plain rendering switch.
+        Rich screens are the default; disabled they degrade to classic
+        text forms with a regular inline keyboard
+        """
+        return bool(self._db.get("legacy.inline", "rich_mode", True))
+
     async def show(self: "InlineManager", call: typing.Any, screen: Screen) -> bool:
         """Edit the unit of `call` to `screen` and answer with its toast"""
 
