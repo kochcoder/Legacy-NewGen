@@ -62,6 +62,7 @@ from legacytl.tl.functions.messages import (
     EditForumTopicRequest,
     GetDialogFiltersRequest,
     GetForumTopicsByIDRequest,
+    GetForumTopicsRequest,
     SendReactionRequest,
     SetHistoryTTLRequest,
     UpdateDialogFilterRequest,
@@ -1029,6 +1030,34 @@ async def asset_forum_topic(
 
         return result.topics[0]
     
+    async def find_existing_topic() -> typing.Optional[ForumTopic]:
+        # A fresh install (or a db reset) has an empty cache, but the channel
+        # may already carry topics created by a previous install — reuse them
+        # instead of duplicating on every reinstall.
+        try:
+            result = await client(
+                GetForumTopicsRequest(
+                    peer=entity,
+                    offset_date=None,
+                    offset_id=0,
+                    offset_topic=0,
+                    limit=100,
+                    q=title,
+                )
+            )
+        except Exception:
+            logger.debug("Failed to list forum topics", exc_info=True)
+            return None
+
+        for topic in getattr(result, "topics", []):
+            if (
+                not isinstance(topic, ForumTopicDeleted)
+                and getattr(topic, "title", "").strip() == title.strip()
+            ):
+                return topic
+
+        return None
+
     forums_cache = db.get("legacy.forums", "forums_cache", {})
 
     # Topics used to be cached by channel title, which does not survive a rename
@@ -1050,6 +1079,14 @@ async def asset_forum_topic(
             await fw_protect()
             new_topic = await create_topic()
             forums_cache[cache_key][title] = new_topic.id
+
+    elif (found := await find_existing_topic()):
+        # Topic is already there (created by a previous install), just adopt it
+        logger.debug("Reusing existing forum topic '%s' in %s", title, entity.title)
+        forums_cache.setdefault(cache_key, {})[title] = found.id
+        db.set("legacy.forums", "forums_cache", forums_cache)
+
+        return found
 
     else:
         await fw_protect()
