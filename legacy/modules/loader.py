@@ -326,13 +326,6 @@ class LoaderMod(loader.Module):
 
     @loader.command(alias="lm")
     async def loadmod(self, message: Message, force_pm: bool = False):
-        args = utils.get_args_raw(message)
-        if "-fs" in args:
-            force_save = True
-            args = args.replace("-fs", "").strip()
-        else:
-            force_save = False
-
         msg = message if message.file else (await message.get_reply_message())
 
         if msg is None or msg.media is None:
@@ -341,7 +334,6 @@ class LoaderMod(loader.Module):
 
         await utils.answer(message, self.strings("loading_module_via_file"))
 
-        path_ = None
         doc = await msg.download_media(bytes)
 
         try:
@@ -350,27 +342,11 @@ class LoaderMod(loader.Module):
             await utils.answer(message, self.strings("bad_unicode"))
             return
 
-        if path_ is not None:
-            await self.load_module(
-                doc,
-                message,
-                origin=path_,
-                save_fs=(
-                    force_save
-                    or self._db.get(main.__name__, "permanent_modules_fs", False)
-                    and not self._db.get(main.__name__, "disable_modules_fs", False)
-                ),
-            )
-        else:
-            await self.load_module(
-                doc,
-                message,
-                save_fs=(
-                    force_save
-                    or self._db.get(main.__name__, "permanent_modules_fs", False)
-                    and not self._db.get(main.__name__, "disable_modules_fs", False)
-                ),
-            )
+        if message.file:
+            await message.edit("")
+            message = await message.respond("🌙", reply_to=utils.get_topic(message))
+
+        await self.load_module(doc, message)
 
     async def approve_internal(
         self,
@@ -400,7 +376,7 @@ class LoaderMod(loader.Module):
         name: typing.Optional[str] = None,
         origin: str = "<string>",
         did_requirements: bool = False,
-        save_fs: bool = False,
+        save_fs: bool = True,
         blob_link: bool = False,
         suggest_sub: bool = True,
     ):
