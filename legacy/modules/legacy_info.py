@@ -79,6 +79,7 @@ class LegacyInfoMod(loader.Module):
                 ("🌼", "<emoji document_id=5224219153077914783>❤️</emoji>"),
                 ("🐧", "<emoji document_id=5361541227604878624>🐧</emoji>"),
                 ("🧨", "<emoji document_id=5379774338733994368>🧨</emoji>"),
+                ("📱", "<emoji document_id=5967591100532134862>📱</emoji>"),
             ]:
                 platform = platform.replace(emoji, icon)
         else:
