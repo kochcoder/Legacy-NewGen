@@ -27,7 +27,7 @@ from legacytl.tl.types import (
     UpdateShort,
     UserFull,
 )
-from legacytl.utils import is_list_like
+from legacytl.utils import is_list_like, resolve_id
 
 from .types import (
     CacheRecordEntity,
@@ -38,6 +38,29 @@ from .types import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Records past their own expiry and older than this are evicted, otherwise
+# every entity ever looked up would stay in memory for the whole uptime
+CACHE_MAX_AGE = 60 * 60
+CACHE_PURGE_INTERVAL = 5 * 60
+
+
+def _is_stale(record, now: float) -> bool:
+    return record.expired and record.ts + CACHE_MAX_AGE < now
+
+
+def _normalize_id(value: typing.Any) -> typing.Any:
+    """Turns marked (negative) ids into bare ones, so cache keys match"""
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, str) and value.startswith("-") and value[1:].isdigit():
+        value = int(value)
+
+    if isinstance(value, int) and value < 0:
+        return resolve_id(value)[0]
+
+    return value
 
 
 def hashable(value: typing.Any) -> bool:
@@ -58,6 +81,7 @@ def hashable(value: typing.Any) -> bool:
 class CustomTelegramClient(TelegramClient):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._legacy_cache_purged = time.time()
 
         self._legacy_entity_cache: typing.Dict[
             typing.Union[str, int],
@@ -121,6 +145,29 @@ class CustomTelegramClient(TelegramClient):
     @property
     def forbidden_constructors(self) -> typing.List[str]:
         return self._forbidden_constructors
+
+    def _purge_caches(self, force: bool = False):
+        """Evicts cache records long past their expiry, so they don't pile up"""
+        now = time.time()
+        last = getattr(self, "_legacy_cache_purged", 0)
+        if not force and now - last < CACHE_PURGE_INTERVAL:
+            return
+
+        self._legacy_cache_purged = now
+        for cache in (
+            self._legacy_entity_cache,
+            self._legacy_fullchannel_cache,
+            self._legacy_fulluser_cache,
+        ):
+            for key in [key for key, record in cache.items() if _is_stale(record, now)]:
+                del cache[key]
+
+        for entity, users in list(self._legacy_perms_cache.items()):
+            for key in [key for key, record in users.items() if _is_stale(record, now)]:
+                del users[key]
+
+            if not users:
+                del self._legacy_perms_cache[entity]
 
     def _exteragram_transform(self, value: typing.Any) -> typing.Any:
         from . import utils
@@ -207,8 +254,7 @@ class CustomTelegramClient(TelegramClient):
         else:
             hashable_entity = entity
 
-        if str(hashable_entity).isdigit() and int(hashable_entity) < 0:
-            hashable_entity = int(str(hashable_entity)[4:])
+        hashable_entity = _normalize_id(hashable_entity)
 
         if (
             not force
@@ -229,6 +275,7 @@ class CustomTelegramClient(TelegramClient):
         resolved_entity = await super().get_entity(entity)
 
         if resolved_entity:
+            self._purge_caches()
             cache_record = CacheRecordEntity(hashable_entity, resolved_entity, exp)
             self._legacy_entity_cache[hashable_entity] = cache_record
             logger.debug("Saved hashable_entity %s to cache", hashable_entity)
@@ -301,11 +348,8 @@ class CustomTelegramClient(TelegramClient):
             hashable_entity = entity
             hashable_user = user
 
-        if str(hashable_entity).isdigit() and int(hashable_entity) < 0:
-            hashable_entity = int(str(hashable_entity)[4:])
-
-        if str(hashable_user).isdigit() and int(hashable_user) < 0:
-            hashable_user = int(str(hashable_user)[4:])
+        hashable_entity = _normalize_id(hashable_entity)
+        hashable_user = _normalize_id(hashable_user)
 
         if (
             not force
@@ -397,8 +441,7 @@ class CustomTelegramClient(TelegramClient):
         else:
             hashable_entity = entity
 
-        if str(hashable_entity).isdigit() and int(hashable_entity) < 0:
-            hashable_entity = int(str(hashable_entity)[4:])
+        hashable_entity = _normalize_id(hashable_entity)
 
         if (
             not force
@@ -409,6 +452,7 @@ class CustomTelegramClient(TelegramClient):
             return self._legacy_fullchannel_cache[hashable_entity].full_channel
 
         result = await self._call(self._sender, GetFullChannelRequest(channel=entity))
+        self._purge_caches()
         self._legacy_fullchannel_cache[hashable_entity] = CacheRecordFullChannel(
             hashable_entity,
             result,
@@ -449,8 +493,7 @@ class CustomTelegramClient(TelegramClient):
         else:
             hashable_entity = entity
 
-        if str(hashable_entity).isdigit() and int(hashable_entity) < 0:
-            hashable_entity = int(str(hashable_entity)[4:])
+        hashable_entity = _normalize_id(hashable_entity)
 
         if (
             not force
@@ -461,6 +504,7 @@ class CustomTelegramClient(TelegramClient):
             return self._legacy_fulluser_cache[hashable_entity].full_user
 
         result = await self._call(self._sender, GetFullUserRequest(entity))
+        self._purge_caches()
         self._legacy_fulluser_cache[hashable_entity] = CacheRecordFullUser(
             hashable_entity,
             result,

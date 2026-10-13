@@ -6,6 +6,7 @@
 
 import asyncio
 import atexit
+import contextlib
 import logging
 import os
 import random
@@ -27,8 +28,17 @@ def get_startup_callback() -> callable:
     )
 
 
+def _flush_databases() -> None:
+    """Writes pending debounced db changes. SIGTERM/execl don't run atexit"""
+    with contextlib.suppress(Exception):
+        from . import database
+
+        database.flush_all()
+
+
 def die():
     """Platform-dependent way to kill the current process group"""
+    _flush_databases()
     if "DOCKER" in os.environ:
         sys.exit(0)
     else:
@@ -38,6 +48,7 @@ def die():
 
 
 def restart():
+    _flush_databases()
     if os.environ.get("LEGACYAPK") == "1":
         # Phone host app: the supervisor outside restarts us if we exit, but
         # die() below kills the whole process group — including the host app
