@@ -362,9 +362,12 @@ class Utils(InlineUnit):
 
             if isinstance(rich_html, Screen):
                 screen = rich_html
+                # html() embeds keyboard buttons into the text and prunes
+                # the markup, so it must run before the markup is read
+                rich_html = screen.html()
+                rich_source = screen.source
                 if not reply_markup:
                     reply_markup = screen.markup
-                rich_source, rich_html = screen.source, screen.html()
             elif not isinstance(rich_html, str):
                 logger.error(
                     "Invalid type for `rich_html`. Expected `str` or `Screen`, got `%s`",

@@ -304,9 +304,12 @@ class Form(InlineUnit):
 
             if isinstance(rich_html, Screen):
                 screen = rich_html
+                # html() embeds keyboard buttons into the text and prunes
+                # the markup, so it must run before the markup is read
+                rich_html = screen.html()
+                rich_source = screen.source
                 if not reply_markup:
                     reply_markup = screen.markup
-                rich_source, rich_html = screen.source, screen.html()
             elif isinstance(rich_html, str):
                 rich_source = rich_html
             else:
@@ -466,9 +469,10 @@ class Form(InlineUnit):
             inline_manager=self, unit_id=unit_id, inline_message_id=inline_message_id
         )
 
-        if needs_premium_emoji_pre_edit or not isinstance(
-            base_reply_markup, Placeholder
-        ):
+        if (
+            needs_premium_emoji_pre_edit
+            or not isinstance(base_reply_markup, Placeholder)
+        ) and screen is None:
             if needs_premium_emoji_pre_edit:
                 await asyncio.sleep(0.3)
             if not await msg.edit(

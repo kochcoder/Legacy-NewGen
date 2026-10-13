@@ -61,6 +61,10 @@ COPY_LIMIT = 256
 ROW_LIMIT = 8
 KEYBOARD_LIMIT = 100
 
+# Reverse map of ICONS: document id -> fallback emoji, for keyboard buttons
+# carrying a custom emoji id
+_ID_TO_EMOJI = {emoji_id: emoji for emoji_id, emoji, _ in ICONS.values()}
+
 _BLOCK = r"details|summary|table|tr|th|td|blockquote|tg-button-row|img|h[1-6]|hr|pre|ul|ol|li"
 _BLOCK_RE = re.compile(rf"\n*(</?(?:{_BLOCK})\b[^>]*>)\n*", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -347,9 +351,14 @@ class Screen:
         *,
         premium: bool = False,
         translate: typing.Optional[typing.Callable[[str], typing.Any]] = None,
+        resolve_action: typing.Optional[
+            typing.Callable[[dict], typing.Optional[typing.Callable]]
+        ] = None,
     ):
         self.premium = premium
         self._translate = translate
+        self._resolve_action = resolve_action
+        self._keyboard_embedded = False
         self.body: typing.List[str] = []
         self.markup: typing.List[typing.List[dict]] = []
         self.taps: typing.Dict[str, dict] = {}
@@ -620,11 +629,100 @@ class Screen:
     def source(self) -> str:
         return "\n".join(([self.notice] if self.notice else []) + self.body)
 
+    def _dict_button_html(self, button: dict) -> typing.Optional[str]:
+        """
+        Rich HTML of a keyboard button dict, if it can live inside the text.
+        Buttons which need the classic keyboard flow (`input` prompts, web
+        apps, raw callback data) return None and stay on the markup
+        """
+        style = button.get("style")
+
+        def _label() -> str:
+            mark = ""
+            emoji_id = button.get("emoji_id")
+            if emoji_id and self.premium:
+                try:
+                    fallback = _ID_TO_EMOJI.get(int(emoji_id), "▫️")
+                except (TypeError, ValueError):
+                    fallback = "▫️"
+                mark = f'<tg-emoji emoji-id="{attr(emoji_id)}">{fallback}</tg-emoji>'
+            return f"{mark} {escape(str(button.get('text', '·')))}".strip()
+
+        def _styled(tag_type: str, **attrs: str) -> str:
+            rendered = "".join(
+                f' {name}="{attr(value)}"' for name, value in attrs.items()
+            )
+            return (
+                f'<tg-button type="{tag_type}"{self._style(style)}{rendered}>'
+                f"{_label()}</tg-button>"
+            )
+
+        if "url" in button:
+            return _styled("url", url=button["url"])
+
+        if "copy" in button:
+            return _styled("copy_text", text=str(button["copy"])[:COPY_LIMIT] or " ")
+
+        callback = button.get("callback")
+        if callback is None and "action" in button and self._resolve_action:
+            callback = self._resolve_action(button)
+
+        if callback is not None:
+            data = utils.rand(30)
+            self.taps[data] = {**button, "callback": callback, "_callback_data": data}
+            return _styled("callback_data", data=data)
+
+        if (
+            "input" not in button
+            and "web_app" not in button
+            and "data" not in button
+            and "switch_inline_query" not in button
+            and "switch_inline_query_current_chat" not in button
+        ):
+            # Pure text chip, no handler behind it
+            return _styled("disabled")
+
+        return None
+
+    def _embed_keyboard(self) -> "Screen":
+        """
+        Moves keyboard buttons into the message text as rich buttons, so
+        every screen renders them in-text instead of a bottom keyboard.
+        Buttons requiring the keyboard flow are kept on the markup.
+        Idempotent: embedded rows are pruned
+        """
+        if self._keyboard_embedded:
+            return self
+
+        self._keyboard_embedded = True
+
+        leftover: typing.List[typing.List[dict]] = []
+        for row in self.markup:
+            embedded = []
+            kept = []
+            for button in row:
+                if (button_html := self._dict_button_html(button)) is not None:
+                    embedded += [button_html]
+                else:
+                    kept += [button]
+
+            # Telegram inline rows hold up to 8 buttons
+            for chunk in utils.chunks(embedded, 8):
+                self.body.append(
+                    f'<tg-button-row align="left">{"".join(chunk)}</tg-button-row>'
+                )
+
+            if kept:
+                leftover += [kept]
+
+        self.markup = leftover
+        return self
+
     def html(self) -> str:
-        return to_rich(self.source)
+        return to_rich(self._embed_keyboard().source)
 
     def plain(self) -> typing.Tuple[str, typing.List[typing.List[dict]]]:
-        return to_plain(self.source, self.taps)
+        return to_plain(self._embed_keyboard().source, self.taps)
 
 
 class Screens:
@@ -632,7 +730,36 @@ class Screens:
 
     def screen(self: "InlineManager") -> Screen:
         """Empty screen, aware of the owner's Premium for custom emoji"""
-        return Screen(premium=self._premium(), translate=self.translator.getkey)
+        return Screen(
+            premium=self._premium(),
+            translate=self.translator.getkey,
+            resolve_action=self._resolve_action_button,
+        )
+
+    def _resolve_action_button(
+        self: "InlineManager", button: dict
+    ) -> typing.Optional[typing.Callable]:
+        """Resolves an `action` keyboard button into its handler"""
+        action = button.get("action")
+        if action == "close":
+            return self._close_unit_handler
+
+        if action == "unload":
+            return self._unload_unit_handler
+
+        if action == "answer":
+            if not button.get("message"):
+                return None
+
+            import functools
+
+            return functools.partial(
+                self._answer_unit_handler,
+                show_alert=button.get("show_alert", False),
+                text=button["message"],
+            )
+
+        return None
 
     def _premium(self: "InlineManager") -> bool:
         me = getattr(self._client, "legacy_me", None)
