@@ -1261,10 +1261,14 @@ class Modules:
 
     async def send_ready(self):
         """Send all data to all modules"""
-        await self.inline.register_manager()
-        await asyncio.gather(
-            *[self.send_ready_one_wrapper(mod) for mod in self.modules]
-        )
+        # The inline bot needs no modules, so it logs in while they initialize
+        bot = asyncio.ensure_future(self.inline.register_manager())
+        try:
+            await asyncio.gather(
+                *[self.send_ready_one_wrapper(mod) for mod in self.modules]
+            )
+        finally:
+            await bot
 
     async def send_ready_one(
         self,

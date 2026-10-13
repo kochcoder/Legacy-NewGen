@@ -867,6 +867,7 @@ async def asset_channel(
     forum: bool = False,
     hide_general: bool = False,
     _folder: typing.Optional[str] = None,
+    _cached_id: typing.Optional[int] = None,
 ) -> typing.Tuple[Channel, bool]:
     """
     Create new channel (if needed) and return its entity
@@ -881,6 +882,7 @@ async def asset_channel(
     :param ttl: Time to live for messages in channel
     :param forum: Whether to create a forum channel
     :param hide_general: Hide '#General' topic
+    :param _cached_id: Channel id resolved before; skips the dialog scan
     :return: Peer and bool: is channel new or pre-existent
     """
     if not hasattr(client, "_channels_cache"):
@@ -897,6 +899,24 @@ async def asset_channel(
         title = title.replace("hikka-", "legacy-")
     if title.startswith("heroku-"):
         title = title.replace("heroku-", "legacy-")
+
+    # Fast path: a channel resolved before is addressable by its id right
+    # from the entity cache, a full dialog scan costs dozens of seconds on
+    # a loaded account
+    if _cached_id:
+        try:
+            entity = await client.get_entity(_cached_id)
+            if isinstance(entity, Channel):
+                client._channels_cache[title] = {
+                    "peer": entity,
+                    "exp": int(time.time()),
+                }
+                return entity, False
+        except Exception:
+            logger.debug(
+                "Cached channel %s didn't resolve, scanning dialogs",
+                _cached_id,
+            )
 
     async for d in client.iter_dialogs():
         if d.title == title:
@@ -1068,7 +1088,8 @@ async def asset_forum_topic(
         forums_cache[cache_key] = forums_cache.pop(entity.title)
 
     if (topic_id := forums_cache.get(cache_key, {}).get(title)):
-        await fw_protect()
+        # A read request, flood protection delays are only needed for the
+        # write operations below
         topic = await client(GetForumTopicsByIDRequest(peer=entity, topics=[topic_id]))
         topic = topic.topics[0]
 

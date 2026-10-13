@@ -5,10 +5,18 @@
 # 🔑 https://www.gnu.org/licenses/agpl-3.0.html
 
 import asyncio
+import atexit
 import collections
+import contextlib
+import copy
+import inspect
+import os
+import tempfile
+import threading
 import ujson
 import logging
 import time
+import weakref
 
 import typing
 
@@ -39,6 +47,36 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+# Owners in this set can only be written by the modules, explicitly allowed
+# in `_DB_ALLOWED_WRITERS`. Both are empty by default, so this protection is
+# opt-in for core code
+_DB_PROTECTED_OWNERS = set()
+_DB_ALLOWED_WRITERS = set()
+# Writes are coalesced: a burst of `set()` calls ends up in a single fsync
+SAVE_DELAY = 0.5
+# Databases (being dicts) aren't hashable, so instances are tracked by id()
+_INSTANCES: "weakref.WeakValueDictionary[int, Database]" = (
+    weakref.WeakValueDictionary()
+)
+
+
+def _register_protected_owner(owner: str, *allowed_writers: str) -> None:
+    """Registers a db owner, which can only be written by allowed modules"""
+    _DB_PROTECTED_OWNERS.add(owner)
+    _DB_ALLOWED_WRITERS.update(allowed_writers)
+
+
+def flush_all():
+    """Synchronously writes pending changes of every database"""
+    for db in list(_INSTANCES.values()):
+        try:
+            db.flush()
+        except Exception:
+            logger.exception("Failed to flush database")
+
+
+atexit.register(flush_all)
+
 
 class NoAssetsChannel(Exception):
     """Raised when trying to read/store asset with no asset channel present"""
@@ -53,6 +91,12 @@ class Database(dict):
         self._assets_topic: typing.Optional[ForumTopic] = None
         self._me: User = None
         self._saving_task: asyncio.Future = None
+        self._dirty: bool = False
+        self._write_lock = threading.Lock()
+        self._generation: int = 0
+        self._written_generation: int = 0
+        self._last_saved: typing.Optional[bytes] = None
+        _INSTANCES[id(self)] = self
 
     def __repr__(self):
         return object.__repr__(self)
@@ -72,6 +116,7 @@ class Database(dict):
                 forum=True,
                 hide_general=True,
                 _folder='legacy',
+                _cached_id=self.get("legacy.forums", "channel_id"),
             )
 
             self.set("legacy.forums", "channel_id", self._content_channel.id)
@@ -97,11 +142,31 @@ class Database(dict):
     def read(self):
         """Read database and stores it in self"""
         try:
-            self.update(**ujson.loads(self._db_file.read_text()))
+            self._update_from_read(ujson.loads(self._db_file.read_text()))
         except ValueError:
-            logger.warning("Database read failed! Creating new one...")
+            # Keep the broken file, otherwise the next save would overwrite
+            # whatever could still be recovered from it
+            backup = self._db_file.with_name(
+                f"{self._db_file.name}.corrupt-{int(time.time())}"
+            )
+            try:
+                os.replace(self._db_file, backup)
+            except OSError:
+                logger.exception("Can't move corrupted database aside")
+                backup = None
+
+            logger.error(
+                "Database %s is corrupted! Starting with an empty one, the"
+                " broken file was saved to %s",
+                self._db_file,
+                backup or "<nowhere>",
+            )
         except FileNotFoundError:
             logger.debug("Database file not found, creating new one...")
+
+    def _update_from_read(self, items: dict) -> None:
+        """Update DB from persisted storage without write-protection checks"""
+        super().update(items)
 
     def process_db_autofix(self, db: dict) -> bool:
         if not utils.is_serializable(db):
@@ -141,8 +206,8 @@ class Database(dict):
 
         return True
 
-    def save(self) -> bool:
-        """Save database"""
+    def _prepare_save(self) -> typing.Optional[bytes]:
+        """Serializes the database, `None` if nothing changed since last save"""
         if not self.process_db_autofix(self):
             try:
                 rev = self._revisions.pop()
@@ -156,25 +221,115 @@ class Database(dict):
                 )
 
             self.clear()
-            self.update(**rev)
+            self._update_from_read(rev)
 
             raise RuntimeError(
                 "Rewriting database to the last revision because new one destructed it"
             )
 
+        data = ujson.dumps(dict(self), indent=4).encode()
+
+        # Autosave runs every few seconds — writing an unchanged database
+        # would be a pointless fsync, and on an SD card a costly one
+        if data == self._last_saved:
+            return None
+
         if self._next_revision_call < time.time():
-            self._revisions += [dict(self)]
+            # Deep copy, so later in-place changes don't leak into the revision
+            self._revisions += [copy.deepcopy(dict(self))]
             self._next_revision_call = time.time() + 3
 
         while len(self._revisions) > 15:
-            self._revisions.pop()
+            self._revisions.pop(0)
+
+        return data
+
+    def _write(self, data: bytes, generation: int) -> bool:
+        """Atomically writes `data` to disk. Safe to call from a thread"""
+        with self._write_lock:
+            # A newer state is already on disk
+            if generation < self._written_generation:
+                return True
+
+            try:
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=self._db_file.parent,
+                    suffix=".tmp",
+                )
+                try:
+                    try:
+                        os.write(fd, data)
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                    os.replace(tmp_path, self._db_file)
+                except BaseException:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_path)
+                    raise
+            except Exception:
+                logger.exception("Database save failed!")
+                return False
+
+            self._written_generation = generation
+            self._last_saved = data
+            return True
+
+    def save(self) -> bool:
+        """Save database immediately"""
+        self._dirty = False
+        data = self._prepare_save()
+        if data is None:
+            return True
+
+        self._generation += 1
+        return self._write(data, self._generation)
+
+    def flush(self) -> bool:
+        """Write pending changes, if any"""
+        if not hasattr(self, "_db_file"):
+            return True
+
+        # A background write may still be in flight, redo it synchronously
+        if not self._dirty and self._written_generation >= self._generation:
+            return True
+
+        return self.save()
+
+    def _schedule_save(self) -> bool:
+        self._dirty = True
         try:
-            self._db_file.write_text(ujson.dumps(self, indent=4))
-        except Exception:
-            logger.exception("Database save failed!")
-            return False
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return self.save()
+
+        if self._saving_task is None or self._saving_task.done():
+            self._saving_task = loop.create_task(self._delayed_save())
 
         return True
+
+    async def _delayed_save(self):
+        try:
+            while self._dirty:
+                await asyncio.sleep(SAVE_DELAY)
+                if not self._dirty:
+                    break
+
+                self._dirty = False
+                try:
+                    data = self._prepare_save()
+                except Exception:
+                    logger.exception("Database save failed!")
+                    continue
+
+                if data is None:
+                    continue
+
+                self._generation += 1
+                await asyncio.to_thread(self._write, data, self._generation)
+        except asyncio.CancelledError:
+            self.flush()
+            raise
 
     async def store_asset(self, message: Message) -> int:
         """
@@ -244,7 +399,7 @@ class Database(dict):
             )
 
         super().setdefault(owner, {})[key] = value
-        return self.save()
+        return self._schedule_save()
 
     def pointer(
         self,
@@ -308,3 +463,60 @@ class Database(dict):
                 )
 
         return pointer_constructor(self, owner, key, default)
+
+    def __setitem__(self, owner: str, value: JSONSerializable) -> None:
+        if owner in _DB_PROTECTED_OWNERS:
+            caller = self._get_write_caller()
+            if caller not in _DB_ALLOWED_WRITERS:
+                self._reject_write(owner, "<dict>", caller)
+
+        if not utils.is_serializable(owner):
+            raise RuntimeError(
+                "Attempted to write object to "
+                f"{owner=} ({type(owner)=}) of database. It is not "
+                "JSON-serializable key which will cause errors"
+            )
+
+        if not utils.is_serializable(value):
+            raise RuntimeError(
+                "Attempted to write object to "
+                f"{value=} ({type(value)=}) of database. It is not "
+                "JSON-serializable value which will cause errors"
+            )
+
+        super().__setitem__(owner, value)
+        self._schedule_save()
+
+    def update(self, *args, **kwargs) -> None:
+        items = dict(*args, **kwargs)
+        for owner in items.keys():
+            if owner in _DB_PROTECTED_OWNERS:
+                caller = self._get_write_caller()
+                if caller not in _DB_ALLOWED_WRITERS:
+                    self._reject_write(owner, "<dict>", caller)
+
+        super().update(items)
+        self._schedule_save()
+
+    @staticmethod
+    def _get_write_caller() -> typing.Optional[str]:
+        # Walked by hand: inspect.stack() reads the source of every frame,
+        # which costs some 350 times more than the name we're after
+        frame = inspect.currentframe()
+        while frame:
+            mod = frame.f_globals.get("__name__", None)
+            if mod and mod != __name__ and mod != f"{__package__}.pointers":
+                return mod
+
+            frame = frame.f_back
+
+        return None
+
+    @staticmethod
+    def _reject_write(owner: str, key: str, caller: typing.Optional[str]):
+        logger.warning(
+            "Blocked db write to protected owner=%s key=%s from %s",
+            owner,
+            key,
+            caller or "<unknown>",
+        )
