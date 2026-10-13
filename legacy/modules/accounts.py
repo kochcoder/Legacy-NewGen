@@ -96,29 +96,31 @@ class AccountsMod(loader.Module):
     async def _show_accounts(self, target):
         infos = [self._client_info(c) for c in self._clients()]
         screen = self.inline.screen()
-        screen.add(self.strings("list_title"))
-        rows = []
-        for info in infos:
-            if not info["id"]:
-                continue
-            label = f"{'⭐ ' if info['premium'] else ''}{info['name']} <code>{info['id']}</code>"
-            rows.append(
-                [
-                    {
-                        "text": label,
-                        "callback": self._acc_menu,
-                        "args": (info["id"],),
-                    }
-                ]
+        active = [info for info in infos if info["id"]]
+        screen.add(
+            f"{screen.icon('user')} {self.strings('list_title')} "
+            + screen.badge(str(len(active)), "primary")
+        )
+        for info in active:
+            screen.add(
+                screen.tap(
+                    utils.escape_html(f"{info['name']} · {info['id']}"),
+                    self._acc_menu,
+                    info["id"],
+                    style="primary",
+                    icon="user",
+                )
             )
-        screen.keyboard(
-            *rows,
-            [
-                {
-                    "text": self.strings("add_btn"),
-                    "callback": self._acc_add_hint,
-                }
-            ],
+        screen.add(
+            screen.row(
+                screen.tap(
+                    self.strings("add_btn"),
+                    self._acc_add_hint,
+                    icon="add",
+                    style="success",
+                ),
+                align="left",
+            )
         )
         if isinstance(target, Message):
             await self.inline.form("", target, rich_html=screen)
