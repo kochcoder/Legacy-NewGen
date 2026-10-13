@@ -324,27 +324,6 @@ class LoaderMod(loader.Module):
             await utils.answer(message, "\n\n".join(output))
         return buff
 
-    async def _inline__load(
-        self,
-        call: InlineCall,
-        doc: str,
-        path_: str,
-        mode: str,
-    ):
-        save = False
-        if mode == "all_yes":
-            self._db.set(main.__name__, "permanent_modules_fs", True)
-            self._db.set(main.__name__, "disable_modules_fs", False)
-            await call.answer(self.strings("will_save_fs"))
-            save = True
-        elif mode == "all_no":
-            self._db.set(main.__name__, "disable_modules_fs", True)
-            self._db.set(main.__name__, "permanent_modules_fs", False)
-        elif mode == "once":
-            save = True
-
-        await self.load_module(doc, call, origin=path_ or "<string>", save_fs=save)
-
     @loader.command(alias="lm")
     async def loadmod(self, message: Message, force_pm: bool = False):
         args = utils.get_args_raw(message)
@@ -370,52 +349,6 @@ class LoaderMod(loader.Module):
         except UnicodeDecodeError:
             await utils.answer(message, self.strings("bad_unicode"))
             return
-
-        if (
-            not self._db.get(
-                main.__name__,
-                "disable_modules_fs",
-                False,
-            )
-            and not self._db.get(main.__name__, "permanent_modules_fs", False)
-            and not force_save
-        ):
-            if message.file:
-                await message.edit("")
-                message = await message.respond("🌙", reply_to=utils.get_topic(message))
-
-            _screen = self.inline.screen()
-            _screen.add(_screen.icon("module") + " " + self.strings("module_fs"))
-            _screen.keyboard(
-                [
-                    {
-                        "text": self.strings("save"),
-                        "callback": self._inline__load,
-                        "args": (doc, path_, "once"),
-                    },
-                    {
-                        "text": self.strings("no_save"),
-                        "callback": self._inline__load,
-                        "args": (doc, path_, "no"),
-                    },
-                ],
-                [
-                    {
-                        "text": self.strings("save_for_all"),
-                        "callback": self._inline__load,
-                        "args": (doc, path_, "all_yes"),
-                    }
-                ],
-                [
-                    {
-                        "text": self.strings("never_save"),
-                        "callback": self._inline__load,
-                        "args": (doc, path_, "all_no"),
-                    }
-                ],
-            )
-            if await self.inline.form("", message, rich_html=_screen):
-                return
 
         if path_ is not None:
             await self.load_module(
