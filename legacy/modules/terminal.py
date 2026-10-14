@@ -77,6 +77,7 @@ class MessageEditor:
         config,
         strings,
         request_message,
+        censor=None,
     ):
         self.message = message
         self.command = command
@@ -87,6 +88,7 @@ class MessageEditor:
         self.config = config
         self.strings = strings
         self.request_message = request_message
+        self.censor = censor or (lambda text: text)
 
     async def update_stdout(self, stdout):
         self.stdout = stdout
@@ -103,8 +105,12 @@ class MessageEditor:
             text += self.strings("finished").format(utils.escape_html(str(self.rc)))
 
         text += self.strings("stdout")
-        text += utils.escape_html(self.stdout[max(len(self.stdout) - 2048, 0) :])
-        stderr = utils.escape_html(self.stderr[max(len(self.stderr) - 1024, 0) :])
+        text += utils.escape_html(
+            self.censor(self.stdout[max(len(self.stdout) - 2048, 0) :])
+        )
+        stderr = utils.escape_html(
+            self.censor(self.stderr[max(len(self.stderr) - 1024, 0) :])
+        )
         text += (self.strings("stderr") + stderr) if stderr else ""
         text += self.strings("end")
 
@@ -137,8 +143,8 @@ class SudoMessageEditor(MessageEditor):
         r"\[sudo\] пароль для (.*): sudo: [0-9]+ неправильные попытки ввода пароля"
     ]  # fmt: skip
 
-    def __init__(self, message, command, config, strings, request_message, client):
-        super().__init__(message, command, config, strings, request_message)
+    def __init__(self, message, command, config, strings, request_message, client, censor=None):
+        super().__init__(message, command, config, strings, request_message, censor)
         self.process = None
         self.state = 0
         self.authmsg = None
@@ -266,6 +272,13 @@ class TerminalMod(loader.Module):
         )
         self.activecmds = {}
 
+    def _censor(self, text: str) -> str:
+        """Masks secrets via the Evaluator's censor, if it is loaded"""
+        with contextlib.suppress(Exception):
+            return self.lookup("Evaluator").censor(text)
+
+        return text
+
     @loader.command()
     async def terminalcmd(self, message):
         await self.run_command(message, utils.get_args_raw(message))
@@ -318,7 +331,8 @@ class TerminalMod(loader.Module):
 
         if editor is None:
             editor = SudoMessageEditor(
-                message, cmd, self.config, self.strings, message, self._client
+                message, cmd, self.config, self.strings, message, self._client,
+                censor=self._censor,
             )
 
         editor.update_process(sproc)

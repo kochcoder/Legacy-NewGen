@@ -7,6 +7,7 @@
 import contextlib
 import itertools
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,7 @@ from legacytl.tl.types import Message
 from legacytl.tl.types.messages import AffectedMessages
 from meval import meval
 
-from .. import loader, utils
+from .. import loader, main, utils
 from ..log import LegacyException
 
 
@@ -414,22 +415,63 @@ class Evaluator(loader.Module):
                 ),
             )
 
-    def censor(self, ret: str) -> str:
-        ret = ret.replace(str(self._client.legacy_me.phone), "&lt;phone&gt;")
+    def _secrets(self) -> typing.Dict[str, str]:
+        """Builds {secret: mask} map for every credential reachable from here"""
+        secrets = {}
+
+        def add(secret: typing.Any, mask: str):
+            # Short strings would cause false positives all over the output
+            if isinstance(secret, str) and len(secret) >= 6:
+                secrets[secret] = mask
+
+        # Container hosts pass the DB URI through env; `.term env` shows it
+        add(
+            os.environ.get("DATABASE_URL") or main.get_config_key("db_uri"),
+            f"postgresql://{'*' * 26}",
+        )
+        add(main.get_config_key("api_hash"), "*" * 32)
 
         if btoken := self._db.get("legacy.inline", "bot_token", False):
-            ret = ret.replace(
-                btoken,
-                f"{btoken.split(':')[0]}:{'*' * 26}",
-            )
+            add(btoken, f"{btoken.split(':')[0]}:{'*' * 26}")
 
         if htoken := self.lookup("loader").get("token", False):
-            ret = ret.replace(htoken, f"eugeo_{'*' * 26}")
+            add(htoken, f"eugeo_{'*' * 26}")
 
-        ret = ret.replace(
-            StringSession.save(self._client.session),
-            "StringSession(**************************)",
-        )
+        clients = [self._client, *self.allmodules.allclients]
+        if getattr(self, "inline", None) and getattr(self.inline, "_bot_client", None):
+            clients += [self.inline._bot_client]
+
+        for client in clients:
+            session = getattr(client, "session", None)
+            if not session:
+                continue
+
+            with contextlib.suppress(Exception):
+                add(
+                    StringSession.save(session),
+                    "StringSession(**************************)",
+                )
+
+            key = getattr(getattr(session, "auth_key", None), "key", None)
+            if key:
+                add(key.hex(), "*" * 64)
+                add(key.hex().upper(), "*" * 64)
+                add(repr(key)[2:-1], "*" * 64)
+
+        return secrets
+
+    def censor(self, ret: str) -> str:
+        """Masks every known secret in the text, longest first"""
+        for secret, mask in sorted(
+            self._secrets().items(),
+            key=lambda item: -len(item[0]),
+        ):
+            ret = ret.replace(secret, mask)
+
+        if phone := getattr(self._client.legacy_me, "phone", None):
+            # The phone can be formatted: "+7 (999) 000-11-22"
+            pattern = r"[\s\-()]*".join(map(re.escape, phone))
+            ret = re.sub(rf"(?<!\d)\+?{pattern}(?!\d)", "&lt;phone&gt;", ret)
 
         return ret
 
