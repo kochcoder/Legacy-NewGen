@@ -507,8 +507,6 @@ def loop(
 
 
 MODULES_NAME = "modules"
-ru_keys = 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,'
-en_keys = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~@#$%^&QWERTYUIOP{}ASDFGHJKL:\"|ZXCVBNM<>?"
 
 BASE_DIR = (
     "/data"
@@ -747,6 +745,7 @@ class Modules:
         self.watchers = []
         self._log_handlers = []
         self._core_commands = []
+        self._find_alias_cache = {}
         self.__approve = []
         self.allclients = allclients
         self.client = client
@@ -778,6 +777,7 @@ class Modules:
             self.inline_handlers = inline_handlers
             self.callback_handlers = callback_handlers
             self.watchers = watchers
+            self._find_alias_cache.clear()
 
             logger.debug(
                 (
@@ -796,6 +796,7 @@ class Modules:
         self,
         mods: typing.Optional[typing.List[str]] = None,
         no_external: bool = False,
+        defer_external: bool = True,
     ) -> typing.List[Module]:
         """Load all modules in the module directory"""
         external_mods = []
@@ -823,9 +824,34 @@ class Modules:
         loaded += await self._register_modules(mods)
 
         if not no_external:
-            loaded += await self._register_modules(external_mods, "<file>")
+            if defer_external and external_mods:
+                # Heavy user modules (their imports alone can take tens of
+                # seconds) load in the background: the bot answers core
+                # commands right away, externals stream in one by one
+                self._external_load_task = asyncio.ensure_future(
+                    self._register_external(external_mods, loaded)
+                )
+            else:
+                loaded += await self._register_modules(external_mods, "<file>")
 
         return loaded
+
+    async def _register_external(self, external_mods: list, loaded: list):
+        """
+        Background load of user modules: each one gets its config and
+        `client_ready` right after registration
+        """
+        for mod in external_mods:
+            try:
+                for instance in await self._register_modules([mod], "<file>"):
+                    if not instance:
+                        continue
+
+                    loaded.append(instance)
+                    self.send_config_one(instance)
+                    await self.send_ready_one_wrapper(instance)
+            except Exception:
+                logger.exception("Failed to background-load module %s", mod)
 
     async def _register_modules(
         self,
@@ -971,6 +997,8 @@ class Modules:
                 raise CoreOverwriteError(command=_command)
 
             self.commands.update({_command.lower(): cmd})
+
+        self._find_alias_cache.clear()
 
         for alias, cmd in self.aliases.copy().items():
             if cmd in instance.commands:
@@ -1142,6 +1170,15 @@ class Modules:
         if not alias:
             return None
 
+        cache = getattr(self, "_find_alias_cache", None)
+        if cache is None:
+            cache = self._find_alias_cache = {}
+
+        # Result only depends on commands/aliases state; both invalidate the cache
+        if not include_legacytl and alias in cache:
+            return cache[alias]
+
+        result = None
         for command_name, _command in self.commands.items():
             aliases = []
             if getattr(_command, "alias", None) and not (
@@ -1159,28 +1196,33 @@ class Modules:
                 and alias.lower() not in self._core_commands
                 for _alias in aliases
             ):
-                return command_name
+                result = command_name
+                break
 
-        if alias in self.aliases and include_legacytl:
+        if result is None and alias in self.aliases and include_legacytl:
             return self.aliases[alias]
 
-        return None
+        if not include_legacytl:
+            cache[alias] = result
+
+        return result
 
     def dispatch(self, _command: str) -> typing.Tuple[str, typing.Optional[str]]:
         """Dispatch command to appropriate module"""
 
-        return next(
-            (
-                (cmd, self.commands[cmd.lower()])
-                for cmd in [
-                    _command,
-                    self.aliases.get(_command.lower()),
-                    self.find_alias(_command),
-                ]
-                if cmd and cmd.lower() in self.commands
-            ),
-            (_command, None),
-        )
+        # Candidates are evaluated lazily: the old code built the whole list
+        # eagerly, so the O(n) find_alias scan ran on every single command
+        if _command and _command.lower() in self.commands:
+            return _command, self.commands[_command.lower()]
+
+        for cmd in (
+            self.aliases.get(_command.lower()),
+            self.find_alias(_command),
+        ):
+            if cmd and cmd.lower() in self.commands:
+                return cmd, self.commands[cmd.lower()]
+
+        return _command, None
 
     def send_config(self, skip_hook: bool = False):
         """Configure modules"""
@@ -1259,10 +1301,10 @@ class Modules:
             with contextlib.suppress(Exception):
                 unregister(mod, purpose)
 
-    async def send_ready(self):
+    async def send_ready(self, bot_login: asyncio.Future = None):
         """Send all data to all modules"""
-        # The inline bot needs no modules, so it logs in while they initialize
-        bot = asyncio.ensure_future(self.inline.register_manager())
+        # The bot login may have been started before module loading already
+        bot = bot_login or asyncio.ensure_future(self.inline.register_manager())
         try:
             await asyncio.gather(
                 *[self.send_ready_one_wrapper(mod) for mod in self.modules]
@@ -1402,6 +1444,8 @@ class Modules:
                     if _command == name:
                         del self.aliases[alias]
 
+        self._find_alias_cache.clear()
+
     def unregister_watchers(self, instance: Module, purpose: str):
         for _watcher in self.watchers.copy():
             if _watcher.__self__.__class__.__name__ == instance.__class__.__name__:
@@ -1431,11 +1475,15 @@ class Modules:
             return False
 
         self.aliases[alias.lower().strip()] = cmd
+        self._find_alias_cache.clear()
         return True
 
     def remove_alias(self, alias: str) -> bool:
         """Remove an alias"""
-        return bool(self.aliases.pop(alias.strip(), None))
+        removed = bool(self.aliases.pop(alias.strip(), None))
+        if removed:
+            self._find_alias_cache.clear()
+        return removed
 
     async def log(self, *args, **kwargs):
         """Unnecessary placeholder for logging"""

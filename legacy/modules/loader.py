@@ -382,6 +382,12 @@ class LoaderMod(loader.Module):
             state = not state
 
         self._db.set("legacy.inline", "rich_mode", state)
+
+        if state:
+            # Units latched to plain after a failed rich edit get a retry
+            for unit in self.inline._units.values():
+                unit.pop("rich_failed", None)
+
         await utils.answer(
             message,
             self.strings("richmode_on" if state else "richmode_off"),
@@ -557,12 +563,20 @@ class LoaderMod(loader.Module):
                     "--no-warn-script-location",
                     *["--user"] if loader.USER_INSTALL else [],
                     *requirements,
+                    stderr=asyncio.subprocess.PIPE,
                 )
 
-                rc = await pip.wait()
+                _, pip_err = await pip.communicate()
 
-                if rc != 0:
-                    return self.strings["requirements_failed"]
+                if pip.returncode != 0:
+                    # Show the actual pip error instead of failing silently
+                    err_tail = (pip_err or b"").decode("utf-8", "replace").strip()
+                    logger.error("pip install failed: %s", err_tail)
+                    return self.strings["requirements_failed"] + (
+                        f"\n<code>{utils.escape_html(err_tail[-500:])}</code>"
+                        if err_tail
+                        else ""
+                    )
 
                 importlib.invalidate_caches()
 

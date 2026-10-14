@@ -44,8 +44,6 @@ from .tl_cache import CustomTelegramClient
 logger = logging.getLogger(__name__)
 
 # Keys for layout switch
-ru_keys = 'ёйцукенгшщзхъфывапролджэячсмитьбю.Ё"№;%:?ЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭ/ЯЧСМИТЬБЮ,'
-en_keys = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~@#$%^&QWERTYUIOP{}ASDFGHJKL:\"|ZXCVBNM<>?"
 ALL_TAGS = [
     "no_commands",
     "only_commands",
@@ -92,6 +90,79 @@ ALL_TAGS = [
 ]
 
 
+# Static tag checks: previously a ~40-lambda dict rebuilt per message,
+# now plain (message, func) -> bool callables built once at import
+_TAG_CHECKS = {
+    "out": lambda m, func: getattr(m, "out", True),
+    "in": lambda m, func: not getattr(m, "out", True),
+    "only_messages": lambda m, func: isinstance(m, Message),
+    "editable": lambda m, func: (
+        not getattr(m, "out", False)
+        and not getattr(m, "fwd_from", False)
+        and not getattr(m, "sticker", False)
+        and not getattr(m, "via_bot_id", False)
+    ),
+    "no_media": lambda m, func: (
+        not isinstance(m, Message) or not getattr(m, "media", False)
+    ),
+    "only_media": lambda m, func: isinstance(m, Message) and getattr(m, "media", False),
+    "only_photos": lambda m, func: utils.mime_type(m).startswith("image/"),
+    "only_videos": lambda m, func: utils.mime_type(m).startswith("video/"),
+    "only_audios": lambda m, func: utils.mime_type(m).startswith("audio/"),
+    "only_stickers": lambda m, func: getattr(m, "sticker", False),
+    "only_docs": lambda m, func: getattr(m, "document", False),
+    "only_inline": lambda m, func: getattr(m, "via_bot_id", False),
+    "only_channels": lambda m, func: (
+        getattr(m, "is_channel", False) and not getattr(m, "is_group", False)
+    ),
+    "no_channels": lambda m, func: not getattr(m, "is_channel", False),
+    "no_groups": lambda m, func: (
+        not getattr(m, "is_group", False)
+        or getattr(m, "is_private", False)
+        or getattr(m, "is_channel", False)
+    ),
+    "only_groups": lambda m, func: (
+        getattr(m, "is_group", False)
+        or not getattr(m, "is_private", False)
+        and not getattr(m, "is_channel", False)
+    ),
+    "no_pm": lambda m, func: not getattr(m, "is_private", False),
+    "only_pm": lambda m, func: getattr(m, "is_private", False),
+    "no_inline": lambda m, func: not getattr(m, "via_bot_id", False),
+    "no_stickers": lambda m, func: not getattr(m, "sticker", False),
+    "no_docs": lambda m, func: not getattr(m, "document", False),
+    "no_audios": lambda m, func: not utils.mime_type(m).startswith("audio/"),
+    "no_videos": lambda m, func: not utils.mime_type(m).startswith("video/"),
+    "no_photos": lambda m, func: not utils.mime_type(m).startswith("image/"),
+    "no_forwards": lambda m, func: not getattr(m, "fwd_from", False),
+    "no_reply": lambda m, func: not getattr(m, "reply_to_msg_id", False),
+    "only_forwards": lambda m, func: getattr(m, "fwd_from", False),
+    "only_reply": lambda m, func: getattr(m, "reply_to_msg_id", False),
+    "mention": lambda m, func: getattr(m, "mentioned", False),
+    "no_mention": lambda m, func: not getattr(m, "mentioned", False),
+    "startswith": lambda m, func: (
+        isinstance(m, Message) and m.raw_text.startswith(func.startswith)
+    ),
+    "endswith": lambda m, func: (
+        isinstance(m, Message) and m.raw_text.endswith(func.endswith)
+    ),
+    "contains": lambda m, func: isinstance(m, Message) and func.contains in m.raw_text,
+    "filter": lambda m, func: callable(func.filter) and func.filter(m),
+    "from_id": lambda m, func: getattr(m, "sender_id", None) == func.from_id,
+    "chat_id": lambda m, func: (
+        utils.get_chat_id(m)
+        == (
+            func.chat_id
+            if not str(func.chat_id).startswith("-100")
+            else int(str(func.chat_id)[4:])
+        )
+    ),
+    "regex": lambda m, func: (
+        isinstance(m, Message) and re.search(func.regex, m.raw_text)
+    ),
+}
+
+
 class CommandDispatcher:
     def __init__(
         self,
@@ -121,6 +192,34 @@ class CommandDispatcher:
         )
 
         self.raw_handlers = []
+
+        # One-time startup migration of the legacy str prefix to a per-user dict
+        # (was previously checked and rewritten on every message)
+        _prefix = self._db.get(main.__name__, "command_prefix", None)
+        if isinstance(_prefix, str):
+            self._db.set(
+                main.__name__,
+                "command_prefix",
+                {f"{self.client.tg_id}": _prefix},
+            )
+
+    def _resolve_prefix(
+        self,
+        event: typing.Union[events.NewMessage, events.MessageDeleted],
+    ) -> str:
+        """Resolve command prefix for the event sender with a single db read"""
+        key = main.__name__
+        default = "."
+        prefixes = self._db.get(key, "command_prefix", default)
+        if isinstance(prefixes, str):
+            # Defensive: migrated at startup, this only covers mid-run
+            # str writes by third-party code
+            prefixes = {f"{self.client.tg_id}": prefixes}
+
+        set_default_prefix = (
+            prefixes.get(f"{self.client.tg_id}") if event.out else default
+        )
+        return prefixes.get(f"{event.sender_id}", set_default_prefix)
 
     @staticmethod
     def _patch_message_emoji_methods(message: Message) -> Message:
@@ -255,26 +354,13 @@ class CommandDispatcher:
         self,
         event: typing.Union[events.NewMessage, events.MessageDeleted],
         watcher: bool = False,
+        check_only: bool = False,
     ) -> typing.Union[bool, typing.Tuple[Message, str, str, callable]]:
         if not hasattr(event, "message") or not hasattr(event.message, "message"):
             return False
 
-        key = main.__name__
-        default = "."
-        prefix = self._db.get(key, "command_prefix", default)
-        if prefix:
-            if isinstance(prefix, str):
-                self._db.set(key, "command_prefix", {f"{self.client.tg_id}": prefix})
-        set_default_prefix = (
-            self._db.get(key, "command_prefix").get(f"{self.client.tg_id}")
-            if event.out
-            else default
-        )
-        prefix = self._db.get(key, "command_prefix", {}).get(
-            f"{event.sender_id}", set_default_prefix
-        )
+        prefix = self._resolve_prefix(event)
 
-        change = str.maketrans(ru_keys + en_keys, en_keys + ru_keys)
         message = utils.censor(event.message)
 
         if not event.message.message:
@@ -283,15 +369,11 @@ class CommandDispatcher:
         if (
             message.out
             and len(message.message) > len(prefix) * 2
-            and (
-                message.message.startswith(prefix * 2)
-                and any(s != prefix for s in message.message)
-                or message.message.startswith(str.translate(prefix * 2, change))
-                and any(s != str.translate(prefix, change) for s in message.message)
-            )
+            and message.message.startswith(prefix * 2)
+            and any(s != prefix for s in message.message)
             and prefix != "s"  # To avoid bug with setprefix command
         ):
-            # Allow escaping commands using .'s
+            # Allow escaping commands using doubled prefix
             if not watcher:
                 await message.edit(
                     message.message[len(prefix) :],
@@ -303,12 +385,7 @@ class CommandDispatcher:
                 )
             return False
 
-        if (
-            event.message.message.startswith(str.translate(prefix, change))
-            and str.translate(prefix, change) != prefix
-        ):
-            message.text = str.translate(message.text, change)
-        elif not event.message.message.startswith(prefix):
+        if not event.message.message.startswith(prefix):
             return False
 
         blacklist_chats = self._db.get(main.__name__, "blacklist_chats", [])
@@ -380,6 +457,11 @@ class CommandDispatcher:
 
         if await self._handle_tags(event, func):
             return False
+
+        if check_only:
+            # Watcher tag filters only need to know it's a runnable command,
+            # mutations and emoji patches are for the real command path
+            return message, prefix, txt, func
 
         if self._db.get(main.__name__, "grep", False) and not watcher:
             message = self._handle_grep(message)
@@ -495,96 +577,39 @@ class CommandDispatcher:
         """
         m = event if isinstance(event, Message) else getattr(event, "message", event)
 
-        reverse_mapping = {
-            "out": lambda: getattr(m, "out", True),
-            "in": lambda: not getattr(m, "out", True),
-            "only_messages": lambda: isinstance(m, Message),
-            "editable": (
-                lambda: not getattr(m, "out", False)
-                and not getattr(m, "fwd_from", False)
-                and not getattr(m, "sticker", False)
-                and not getattr(m, "via_bot_id", False)
-            ),
-            "no_media": lambda: (
-                not isinstance(m, Message) or not getattr(m, "media", False)
-            ),
-            "only_media": lambda: isinstance(m, Message) and getattr(m, "media", False),
-            "only_photos": lambda: utils.mime_type(m).startswith("image/"),
-            "only_videos": lambda: utils.mime_type(m).startswith("video/"),
-            "only_audios": lambda: utils.mime_type(m).startswith("audio/"),
-            "only_stickers": lambda: getattr(m, "sticker", False),
-            "only_docs": lambda: getattr(m, "document", False),
-            "only_inline": lambda: getattr(m, "via_bot_id", False),
-            "only_channels": lambda: (
-                getattr(m, "is_channel", False) and not getattr(m, "is_group", False)
-            ),
-            "no_channels": lambda: not getattr(m, "is_channel", False),
-            "no_groups": (
-                lambda: not getattr(m, "is_group", False)
-                or getattr(m, "is_private", False)
-                or getattr(m, "is_channel", False)
-            ),
-            "only_groups": (
-                lambda: getattr(m, "is_group", False)
-                or not getattr(m, "is_private", False)
-                and not getattr(m, "is_channel", False)
-            ),
-            "no_pm": lambda: not getattr(m, "is_private", False),
-            "only_pm": lambda: getattr(m, "is_private", False),
-            "no_inline": lambda: not getattr(m, "via_bot_id", False),
-            "no_stickers": lambda: not getattr(m, "sticker", False),
-            "no_docs": lambda: not getattr(m, "document", False),
-            "no_audios": lambda: not utils.mime_type(m).startswith("audio/"),
-            "no_videos": lambda: not utils.mime_type(m).startswith("video/"),
-            "no_photos": lambda: not utils.mime_type(m).startswith("image/"),
-            "no_forwards": lambda: not getattr(m, "fwd_from", False),
-            "no_reply": lambda: not getattr(m, "reply_to_msg_id", False),
-            "only_forwards": lambda: getattr(m, "fwd_from", False),
-            "only_reply": lambda: getattr(m, "reply_to_msg_id", False),
-            "mention": lambda: getattr(m, "mentioned", False),
-            "no_mention": lambda: not getattr(m, "mentioned", False),
-            "startswith": lambda: (
-                isinstance(m, Message) and m.raw_text.startswith(func.startswith)
-            ),
-            "endswith": lambda: (
-                isinstance(m, Message) and m.raw_text.endswith(func.endswith)
-            ),
-            "contains": lambda: isinstance(m, Message) and func.contains in m.raw_text,
-            "filter": lambda: callable(func.filter) and func.filter(m),
-            "from_id": lambda: getattr(m, "sender_id", None) == func.from_id,
-            "chat_id": (
-                lambda: utils.get_chat_id(m)
-                == (
-                    func.chat_id
-                    if not str(func.chat_id).startswith("-100")
-                    else int(str(func.chat_id)[4:])
-                )
-            ),
-            "regex": lambda: (
-                isinstance(m, Message) and re.search(func.regex, m.raw_text)
-            ),
-        }
+        if getattr(func, "no_commands", False) and await self._is_command(event):
+            return "no_commands"
 
-        return (
-            "no_commands"
-            if getattr(func, "no_commands", False)
-            and await self._handle_command(event, watcher=True)
-            else (
-                "only_commands"
-                if getattr(func, "only_commands", False)
-                and not await self._handle_command(event, watcher=True)
-                else next(
-                    (
-                        tag
-                        for tag in ALL_TAGS
-                        if getattr(func, tag, False)
-                        and tag in reverse_mapping
-                        and not reverse_mapping[tag]()
-                    ),
-                    None,
-                )
-            )
+        if getattr(func, "only_commands", False) and not await self._is_command(event):
+            return "only_commands"
+
+        return next(
+            (
+                tag
+                for tag in ALL_TAGS
+                if getattr(func, tag, False)
+                and tag in _TAG_CHECKS
+                and not _TAG_CHECKS[tag](m, func)
+            ),
+            None,
         )
+
+    async def _is_command(
+        self,
+        event: typing.Union[events.NewMessage, events.MessageDeleted],
+    ) -> bool:
+        """
+        Memoized per-event 'would this message run a command' check, used by
+        watcher tag filters. Without the cache every `only_commands`/
+        `no_commands` watcher would re-run the whole command pipeline
+        """
+        cached = getattr(event, "_legacy_is_command", None)
+        if cached is not None:
+            return cached
+
+        result = bool(await self._handle_command(event, watcher=True, check_only=True))
+        event._legacy_is_command = result
+        return result
 
     async def handle_incoming(
         self,
@@ -605,8 +630,10 @@ class CommandDispatcher:
             logger.debug("Message is blacklisted")
             return
 
+        # Fetched once per message instead of once per watcher
+        bl = self._db.get(main.__name__, "disabled_watchers", {})
+
         for func in self._modules.watchers:
-            bl = self._db.get(main.__name__, "disabled_watchers", {})
             modname = str(func.__self__.__class__.strings["name"])
 
             if (

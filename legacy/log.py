@@ -792,12 +792,12 @@ class TelegramLogsHandler(logging.Handler):
                         await self._mods[client_id].inline.bot.send_message(
                             self._mods[client_id].logchat,
                             item[0].message,
-                            reply_markup=self._mods[client_id].inline.generate_markup(
-                                self._log_markup(
-                                    self._mods[client_id].inline.bot,
-                                    item[0],
-                                    lib,
-                                )
+                            # Raw dicts - the bot wrapper upgrades them to
+                            # in-text rich buttons
+                            reply_markup=self._log_markup(
+                                self._mods[client_id].inline.bot,
+                                item[0],
+                                lib,
                             ),
                             message_thread_id=self._mods[client_id]._logs_topic.id,
                         )
@@ -840,22 +840,17 @@ class TelegramLogsHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord):
         try:
-            caller = next(
-                (
-                    frame_info.frame.f_locals["_legacy_client_id_logging_tag"]
-                    for frame_info in inspect.stack()
-                    if isinstance(
-                        getattr(getattr(frame_info, "frame", None), "f_locals", {}).get(
-                            "_legacy_client_id_logging_tag"
-                        ),
-                        int,
-                    )
-                ),
-                False,
-            )
+            # Hand-walked frames: inspect.stack() reads the source of every
+            # frame, which is ~350x slower than the tag we're after
+            caller = None
+            frame = sys._getframe()
+            while frame:
+                tag = frame.f_locals.get("_legacy_client_id_logging_tag")
+                if isinstance(tag, int):
+                    caller = tag
+                    break
 
-            if not isinstance(caller, int):
-                caller = None
+                frame = frame.f_back
         except Exception:
             caller = None
 

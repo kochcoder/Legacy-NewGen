@@ -43,6 +43,7 @@ from datetime import timedelta
 from platform import uname
 from urllib.parse import urlparse
 
+import aiohttp
 import git
 import grapheme
 import legacytl
@@ -96,6 +97,8 @@ from legacytl.tl.types import (
     MessageEntityUnknown,
     MessageEntityUrl,
     MessageMediaWebPage,
+    MessageMediaDocument,
+    MessageMediaPhoto,
     PeerChannel,
     PeerChat,
     PeerUser,
@@ -219,23 +222,27 @@ def get_args(message: typing.Union[Message, str]) -> typing.List[str]:
     :param message: Message or string to get arguments from
     :return: List of arguments
     """
-    prefix = message.client.loader.get_prefix(message.sender_id)
+    prefix = None
+    with contextlib.suppress(AttributeError):
+        prefix = message.client.loader.get_prefix(message.sender_id)
 
-    if not (message := getattr(message, "message", message)):
-        return False
+    if not (message := getattr(message, "message", message)) or not isinstance(
+        message, str
+    ):
+        return []
 
-    if message.startswith(prefix):
+    if prefix and message.startswith(prefix):
         message = message[len(prefix):].strip()
 
     if len(message := message.split(maxsplit=1)) <= 1:
         return []
-    
+
     message = message[1]
 
     try:
         split = shlex.split(message)
     except ValueError:
-        return message  # Cannot split, let's assume that it's just one long message
+        split = message.split()  # Unbalanced quotes, fall back to plain splitting
 
     return list(filter(lambda x: len(x) > 0, split))
 
@@ -909,7 +916,7 @@ async def asset_channel(
             if isinstance(entity, Channel):
                 client._channels_cache[title] = {
                     "peer": entity,
-                    "exp": int(time.time()),
+                    "exp": int(time.time()) + 60 * 60 * 5,
                 }
                 return entity, False
         except Exception:
@@ -920,7 +927,7 @@ async def asset_channel(
 
     async for d in client.iter_dialogs():
         if d.title == title:
-            client._channels_cache[title] = {"peer": d.entity, "exp": int(time.time())}
+            client._channels_cache[title] = {"peer": d.entity, "exp": int(time.time()) + 60 * 60 * 5}
             if invite_bot:
                 if all(
                     participant.id != client.loader.inline.bot_id
@@ -997,7 +1004,7 @@ async def asset_channel(
                 )
             )
 
-    client._channels_cache[title] = {"peer": peer, "exp": int(time.time())}
+    client._channels_cache[title] = {"peer": peer, "exp": int(time.time()) + 60 * 60 * 5}
     return peer, True
 
 if typing.TYPE_CHECKING:
@@ -1732,6 +1739,12 @@ def is_serializable(x: typing.Any, /) -> bool:
     :param x: Object to check
     :return: True if object is JSON-serializable, False otherwise
     """
+    # Scalars are always serializable — short-circuit them (owner/key of every
+    # db write are strings). ujson's C loop beats any pure-Python structural
+    # walk on containers, so they still go through the encoder
+    if isinstance(x, (str, int, float, bool, type(None))):
+        return True
+
     try:
         ujson.dumps(x)
         return True
@@ -1957,19 +1970,16 @@ def get_topic(message: Message) -> typing.Optional[int]:
     :param message: Message to get topic of
     :return: int or None if not present
     """
-    return (
-        (message.reply_to.reply_to_top_id or message.reply_to.reply_to_msg_id)
-        if (
-            isinstance(message, Message)
-            and message.reply_to
-            and message.reply_to.forum_topic
-        )
-        else (
-            message.form["top_msg_id"]
-            if isinstance(message, (InlineCall, InlineMessage))
-            else None
-        )
-    )
+    if isinstance(message, Message):
+        reply_to = message.reply_to
+        if reply_to and reply_to.forum_topic:
+            return reply_to.reply_to_top_id or reply_to.reply_to_msg_id
+        return None
+
+    if isinstance(message, (InlineCall, InlineMessage)):
+        return message.form["top_msg_id"]
+
+    return None
 
 
 def get_ram_usage() -> float:
@@ -2139,3 +2149,401 @@ async def send_reaction(
     except Exception as e:
         logger.error(f"Unable to send reaction to the specified message: {e}")
         return
+
+
+def get_args_int(message: typing.Union[Message, str]) -> typing.List[int]:
+    """
+    Get arguments as integers
+    :param message: Message or string to get arguments from
+    :return: List of integers
+    """
+    result = []
+    for arg in get_args(message):
+        try:
+            result.append(int(arg))
+        except ValueError:
+            continue
+    return result
+
+
+def get_args_bool(message: typing.Union[Message, str]) -> typing.List[bool]:
+    """
+    Get arguments as booleans (true/false, yes/no, 1/0, on/off)
+    :param message: Message or string to get arguments from
+    :return: List of booleans
+    """
+    result = []
+    for arg in get_args(message):
+        lower_arg = arg.lower()
+        if lower_arg in ["true", "yes", "1", "on"]:
+            result.append(True)
+        elif lower_arg in ["false", "no", "0", "off"]:
+            result.append(False)
+    return result
+
+
+TAG_RE = re.compile(r"</?([a-zA-Z][a-zA-Z0-9\-]*)(?:\s[^<>]*)?>")
+
+TELEGRAM_HTML_TAGS = {
+    "strong",
+    "b",
+    "em",
+    "i",
+    "tg-spoiler",
+    "u",
+    "del",
+    "s",
+    "blockquote",
+    "code",
+    "pre",
+    "a",
+    "tg-emoji",
+    "emoji",
+    "tg-time",
+    "date",
+}
+
+
+def escape_non_html(text: str) -> str:
+    """
+    Escape all characters that can be parsed as HTML tags, but are not supported by Telegram
+    :param text: Text to escape
+    :return: Escaped text
+    """
+    out = []
+    last = 0
+    for m in TAG_RE.finditer(text):
+        out.append(escape_html(text[last : m.start()]))
+        out.append(
+            m.group(0)
+            if m.group(1).lower() in TELEGRAM_HTML_TAGS
+            else escape_html(m.group(0))
+        )
+        last = m.end()
+
+    out.append(escape_html(text[last:]))
+
+    return "".join(out)
+
+
+def remove_emoji(text: str) -> str:
+    """
+    Removes all emoji from text
+    :param text: Text to clean
+    :return: Cleaned text
+    """
+    import emoji
+
+    allchars = [char for char in text]
+    emoji_list = [c for c in allchars if c in emoji.EMOJI_DATA]
+    clean_text = "".join(
+        [char for char in text if not any(i in char for i in emoji_list)]
+    )
+    return clean_text
+
+
+def extract_urls(text: str) -> typing.List[str]:
+    """
+    Extract all URLs from text
+    :param text: Text to extract URLs from
+    :return: List of URLs
+    """
+    url_regex = re.compile(r"https?://[^\s]+")
+    return url_regex.findall(text)
+
+
+def has_media(message: Message) -> bool:
+    """
+    Check if message contains media
+    :param message: Message to check
+    :return: True if message has media, False otherwise
+    """
+    return isinstance(
+        message.media, (MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage)
+    )
+
+
+def format_file_size(size_bytes: int) -> str:
+    """
+    Format file size in bytes to human-readable format
+    :param size_bytes: Size in bytes
+    :return: Formatted string (e.g., '1.5 MB')
+    """
+    if size_bytes == 0:
+        return "0 B"
+    size_names = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    while size_bytes >= 1024 and i < len(size_names) - 1:
+        size_bytes /= 1024.0
+        i += 1
+    if i == 0:
+        return f"{size_bytes} B"
+    return f"{size_bytes:.1f} {size_names[i]}"
+
+
+_URL_PATTERN = re.compile(
+    r"^https?://"  # http:// or https://
+    r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,63}\.?|"  # domain...
+    r"localhost|"  # localhost...
+    r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # ...or ip
+    r"(?::\d+)?"  # optional port
+    r"(?:/?|[/?]\S+)$",
+    re.IGNORECASE,
+)
+
+
+def is_url(string: str) -> bool:
+    """
+    Check if string is a valid URL
+    :param string: String to check
+    :return: True if valid URL, False otherwise
+    """
+    return _URL_PATTERN.match(string) is not None
+
+
+def get_iso_time() -> str:
+    """
+    Get current time in ISO format
+    :return: ISO formatted time string
+    """
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+
+
+def safe_getattr(obj, attr, default=None):
+    """
+    Safely get attribute from object, returning default if not found
+    :param obj: Object to get attribute from
+    :param attr: Attribute name
+    :param default: Default value if attribute not found
+    :return: Attribute value or default
+    """
+    try:
+        return getattr(obj, attr, default)
+    except AttributeError:
+        return default
+
+
+def duration(seconds: float, strings: typing.Callable[[str], str]) -> str:
+    """
+    `37 ms` below a second, `1.42 s` above
+    :param strings: Module strings with `ms` and `sec` formats
+    """
+    if (ms := seconds * 1000) < 999.5:
+        return strings("ms").format(f"{ms:.1f}" if ms < 10 else round(ms))
+
+    return strings("sec").format(round(seconds, 2))
+
+
+def get_git_status() -> str:
+    """
+    Get short git status of the userbot repository
+    :return: Short status or 'Clean'
+    """
+    try:
+        return git.Repo().git.status("--short") or "Clean"
+    except Exception:
+        return "Unknown"
+
+
+def get_last_commit_message() -> str:
+    """
+    Get the message of the latest commit of the userbot repository
+    :return: Commit message or 'Unknown'
+    """
+    try:
+        return git.Repo().head.commit.message.strip().splitlines()[0]
+    except Exception:
+        return "Unknown"
+
+
+def get_commit_count() -> int:
+    """
+    Get the number of commits in the userbot repository
+    :return: Commit count or 0
+    """
+    try:
+        count = git.Repo().git.rev_list("--count", "HEAD")
+        return int(count) if count.isdigit() else 0
+    except Exception:
+        return 0
+
+
+def get_branch() -> str:
+    """
+    Get the current branch of the userbot repository
+    :return: Branch name or 'unknown'
+    """
+    try:
+        return git.Repo().active_branch.name
+    except Exception:
+        return "unknown"
+
+
+MAX_RESPONSE_SIZE = 5 * 1024 * 1024
+
+
+class ResponseTooLargeError(aiohttp.ClientPayloadError):
+    """Raised when a response body exceeds the allowed size"""
+
+
+async def _read_limited(
+    response: aiohttp.ClientResponse,
+    max_size: typing.Optional[int],
+) -> bytes:
+    if max_size is None:
+        return await response.read()
+
+    if response.content_length is not None and response.content_length > max_size:
+        raise ResponseTooLargeError(
+            f"Response from {response.url} is too large"
+            f" ({response.content_length} bytes, limit is {max_size} bytes)"
+        )
+
+    body = bytearray()
+    async for chunk in response.content.iter_chunked(64 * 1024):
+        body.extend(chunk)
+        if len(body) > max_size:
+            raise ResponseTooLargeError(
+                f"Response from {response.url} exceeds the limit of {max_size} bytes"
+            )
+
+    return bytes(body)
+
+
+async def fetch_bytes(
+    url: str,
+    *,
+    auth: typing.Optional[str] = None,
+    headers: typing.Optional[dict] = None,
+    timeout: int = 30,
+    max_size: typing.Optional[int] = MAX_RESPONSE_SIZE,
+) -> bytes:
+    """
+    Fetch a binary document over HTTP
+    :param url: URL to fetch
+    :param auth: Optional credentials as a "username:password" pair
+    :param headers: Optional headers to send along
+    :param timeout: How long to wait in total, seconds
+    :param max_size: Maximum body size in bytes, `None` to disable the limit
+    :return: Response body
+    :raises aiohttp.ClientError: On a network failure or a non-2xx status
+    :raises ResponseTooLargeError: If the body is larger than `max_size`
+    """
+    if auth:
+        login, _, password = auth.partition(":")
+        auth = aiohttp.BasicAuth(login, password)
+
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=timeout),
+        raise_for_status=True,
+    ) as session:
+        async with session.get(url, auth=auth or None, headers=headers) as response:
+            return await _read_limited(response, max_size)
+
+
+async def fetch_text(
+    url: str,
+    *,
+    auth: typing.Optional[str] = None,
+    headers: typing.Optional[dict] = None,
+    timeout: int = 30,
+    max_size: typing.Optional[int] = MAX_RESPONSE_SIZE,
+) -> str:
+    """
+    Fetch a text document over HTTP
+    :param url: URL to fetch
+    :param auth: Optional credentials as a "username:password" pair
+    :param headers: Optional headers to send along
+    :param timeout: How long to wait in total, seconds. There is always one:
+                  a host that accepts the connection and then goes quiet
+                  would otherwise keep the caller waiting forever
+    :param max_size: Maximum body size in bytes, `None` to disable the limit
+    :return: Response body
+    :raises aiohttp.ClientError: On a network failure or a non-2xx status
+    :raises ResponseTooLargeError: If the body is larger than `max_size`
+    """
+    if auth:
+        login, _, password = auth.partition(":")
+        auth = aiohttp.BasicAuth(login, password)
+
+    async with aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=timeout),
+        raise_for_status=True,
+    ) as session:
+        async with session.get(url, auth=auth or None, headers=headers) as response:
+            body = await _read_limited(response, max_size)
+            try:
+                return body.decode(response.charset or "utf-8")
+            except LookupError:
+                return body.decode("utf-8")
+
+
+def get_hostname() -> str:
+    """
+    Get the hostname of the machine
+    :return: Hostname
+    """
+    try:
+        return socket.gethostname()
+    except Exception:
+        return "Unknown"
+
+
+def resolve_domain(domain: str) -> str:
+    """
+    Resolve domain to IP address
+    :param domain: Domain name
+    :return: IP address or error message
+    """
+    try:
+        return socket.gethostbyname(domain)
+    except socket.gaierror:
+        return "Unable to resolve"
+
+
+def is_port_open(host: str, port: int) -> bool:
+    """
+    Check if a port is open on a host
+    :param host: Hostname or IP
+    :param port: Port number
+    :return: True if open, False otherwise
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def get_network_interfaces() -> typing.Dict[str, str]:
+    """
+    Get network interfaces and their IP addresses
+    :return: Dictionary of interface: IP
+    """
+    import psutil
+
+    try:
+        interfaces = {}
+        for name, addrs in psutil.net_if_addrs().items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    interfaces[name] = addr.address
+                    break
+        return interfaces
+    except Exception:
+        return {}
+
+
+async def bot_is_admin(client: CustomTelegramClient, peer: hints.Entity) -> bool:
+    """Whether the inline bot is an admin of `peer`"""
+    try:
+        return (
+            await client.get_permissions(peer, client.loader.inline.bot_id)
+        ).is_admin
+    except Exception:
+        return False

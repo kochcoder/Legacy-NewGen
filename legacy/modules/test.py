@@ -4,6 +4,7 @@
 # You can redistribute it and/or modify it under the terms of the GNU AGPLv3
 # 🔑 https://www.gnu.org/licenses/agpl-3.0.html
 
+import asyncio
 import getpass
 import inspect
 import logging
@@ -453,9 +454,16 @@ class TestMod(loader.Module):
 
     async def client_ready(self):
         self._content_channel_id = await utils.wait_for_content_channel(self._db)
+        self.logchat = int(f"-100{self._content_channel_id}")
 
+        # Topic resolution + bot invite involve network and flood sleeps —
+        # they must not hold back client_ready. Until the tg log handler is
+        # installed, logs just go to the console
+        asyncio.ensure_future(self._init_logs_topic())
+
+    async def _init_logs_topic(self):
         await utils.fw_protect()
-        
+
         self._logs_topic = await utils.asset_forum_topic(
             client=self._client,
             db=self._db,
@@ -465,8 +473,6 @@ class TestMod(loader.Module):
             icon_emoji_id=5256230583717079814,
             invite_bot=True,
         )
-
-        self.logchat = int(f"-100{self._content_channel_id}")
 
         logging.getLogger().handlers[0].install_tg_log(self)
         logger.debug("Bot logging installed for %s", self.logchat)

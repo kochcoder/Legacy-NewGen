@@ -197,16 +197,34 @@ def run_config():
     return configurator.api_config(None)
 
 
+_config_cache: typing.Dict[str, typing.Any] = {"mtime": None, "data": {}}
+
+
+def _read_config() -> dict:
+    """Read config.json, cached by mtime so reads don't re-parse the file"""
+    try:
+        mtime = CONFIG_PATH.stat().st_mtime
+    except FileNotFoundError:
+        return {}
+
+    if _config_cache["mtime"] != mtime:
+        try:
+            _config_cache["data"] = ujson.loads(CONFIG_PATH.read_text())
+        except ValueError:
+            _config_cache["data"] = {}
+
+        _config_cache["mtime"] = mtime
+
+    return _config_cache["data"]
+
+
 def get_config_key(key: str) -> typing.Union[str, bool]:
     """
     Parse and return key from config
     :param key: Key name in config
     :return: Value of config key or `False`, if it doesn't exist
     """
-    try:
-        return ujson.loads(CONFIG_PATH.read_text()).get(key, False)
-    except FileNotFoundError:
-        return False
+    return _read_config().get(key, False)
 
 
 def save_config_key(key: str, value: str) -> bool:
@@ -216,19 +234,13 @@ def save_config_key(key: str, value: str) -> bool:
     :param value: Desired value in config
     :return: `True` on success, otherwise `False`
     """
-    try:
-        # Try to open our newly created json config
-        config = ujson.loads(CONFIG_PATH.read_text())
-    except FileNotFoundError:
-        # If it doesn't exist, just default config to none
-        # It won't cause problems, bc after new save
-        # we will create new one
-        config = {}
+    config = dict(_read_config())
 
     # Assign config value
     config[key] = value
     # And save config
     CONFIG_PATH.write_text(ujson.dumps(config, indent=4))
+    # The write bumps mtime, so the cache refreshes on the next read
     return True
 
 
@@ -964,7 +976,10 @@ class Legacy:
     async def amain(self, first: bool, client: CustomTelegramClient):
         """Entrypoint for async init, run once for each user"""
         client.parse_mode = "HTML"
-        await client.start()
+        # `amain_wrapper` already authorized us via `get_me()`; `start()`
+        # would just re-issue the same RPC. `connect()` is a no-op when the
+        # connection is alive
+        await client.connect()
 
         db = database.Database(client)
         client.legacy_db = db
@@ -1002,9 +1017,12 @@ class Legacy:
 
         await self._add_dispatcher(client, modules, db)
 
+        # The inline bot needs no modules - it logs in while they load
+        bot_login = asyncio.ensure_future(modules.inline.register_manager())
+
         await modules.register_all(None)
         modules.send_config()
-        await modules.send_ready()
+        await modules.send_ready(bot_login)
 
         if first:
             await self._badge(client)
@@ -1030,7 +1048,14 @@ class Legacy:
             )
         )
 
-        await asyncio.gather(*[self.amain_wrapper(client) for client in self.clients])
+        # One broken client must not take down the others
+        results = await asyncio.gather(
+            *[self.amain_wrapper(client) for client in self.clients],
+            return_exceptions=True,
+        )
+        for res in results:
+            if isinstance(res, Exception):
+                logging.error("Client main loop failed: %s", res, exc_info=res)
 
     def _shutdown_handler(self, signum, frame):
         """Shutdown handler"""

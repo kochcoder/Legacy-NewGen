@@ -106,6 +106,14 @@ class Database(dict):
         self._db_file = main.BASE_PATH / f"config-{self._client.tg_id}.json"
         self.read()
 
+        # Channel/topic resolution involves network and flood-protection
+        # sleeps — it must not block module loading. Consumers either use
+        # `utils.wait_for_content_channel` (polls the db) or assets, which
+        # are only touched long after boot
+        self._content_channel_task = asyncio.ensure_future(self._init_channel())
+
+    async def _init_channel(self):
+        """Background content channel + assets topic resolution"""
         try:
             self._content_channel, _ = await utils.asset_channel(
                 client=self._client,

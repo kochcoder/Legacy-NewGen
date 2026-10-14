@@ -171,6 +171,8 @@ class SecurityManager:
         self._cache: typing.Dict[int, dict] = {}
         self._last_warning: int = 0
         self._sgroups: typing.Dict[str, SecurityGroup] = {}
+        self._rights_last_reload: float = 0.0
+        self._rights_reload_interval: float = 1.0
 
         self._any_admin = self.any_admin = db.get(__name__, "any_admin", False)
         self._default = self.default = db.get(__name__, "default", DEFAULT_PERMISSIONS)
@@ -178,17 +180,27 @@ class SecurityManager:
         self._tsec_user = self.tsec_user = db.pointer(__name__, "tsec_user", [])
         self._owner = self.owner = db.pointer(__name__, "owner", [])
 
-        self._reload_rights()
+        self._reload_rights(force=True)
 
     def apply_sgroups(self, sgroups: typing.Dict[str, SecurityGroup]):
         """Apply security groups"""
         self._sgroups = sgroups
 
-    def _reload_rights(self):
+    def _reload_rights(self, force: bool = False):
         """
         Internal method to ensure that account owner is always in the owner list
-        and to clear out outdated tsec rules
+        and to clear out outdated tsec rules.
+        Throttled: `check()` runs on every dispatched command and inline
+        callback, the lists change at most a few times per session
         """
+        now = time.monotonic()
+        if (
+            not force
+            and now - self._rights_last_reload < self._rights_reload_interval
+        ):
+            return
+
+        self._rights_last_reload = now
 
         if self._client.tg_id not in self._owner:
             self._owner.append(self._client.tg_id)

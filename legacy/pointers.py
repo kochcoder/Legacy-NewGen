@@ -29,8 +29,10 @@ class PointerList(list):
 
     @data.setter
     def data(self, value: list):
-        self.clear()
-        self.extend(value)
+        # Bypass the overridden mutators, otherwise the assignment costs
+        # three db writes (clear + extend + the explicit one below)
+        super().clear()
+        super().extend(value)
         self._save()
 
     def __repr__(self):
@@ -117,8 +119,10 @@ class PointerDict(dict):
 
     @data.setter
     def data(self, value: dict):
-        self.clear()
-        self.update(value)
+        # Bypass the overridden mutators, otherwise the assignment costs
+        # three db writes (clear + update + the explicit one below)
+        super().clear()
+        super().update(value)
         self._save()
 
     def __repr__(self):
