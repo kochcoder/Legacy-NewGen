@@ -83,4 +83,49 @@ def compat(code: str) -> str:
         code,
     )
 
+    # Modules of another modern fork name its package directly; map it the
+    # same way as hikka/heroku above
+    code = re.sub(
+        r"\bimport\s+ataraxia(\.[\w\.]*)?",
+        r"import legacy\1",
+        code,
+    )
+    code = re.sub(
+        r"\bfrom\s+ataraxia\b",
+        "from legacy",
+        code,
+    )
+    code = re.sub(
+        r"\bataraxia\.(?="
+        r"(?:loader|utils|main|types|security|database|translations|dispatcher"
+        r"|tl_cache|validators|version|inline|log|configurator|qr)\b)",
+        "legacy.",
+        code,
+    )
+    code = re.sub(
+        r"\bimport\s+ataraxiatl(\.[\w\.]*)?",
+        r"import legacytl\1",
+        code,
+    )
+    code = re.sub(
+        r"\bfrom\s+ataraxiatl\b",
+        "from legacytl",
+        code,
+    )
+    code = re.sub(
+        r"\bataraxiatl\.",
+        "legacytl.",
+        code,
+    )
+    code = re.sub(
+        r"\b([\w\.-]+)\.(?:ataraxia)_me\b",
+        r"\1.legacy_me",
+        code,
+    )
+    code = re.sub(
+        r"\b([\w\.-]+)\.(?:ataraxia)_inline\b",
+        r"\1.legacy_inline",
+        code,
+    )
+
     return code
