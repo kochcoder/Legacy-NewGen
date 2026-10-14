@@ -196,6 +196,9 @@ class Utils(InlineUnit):
                                 "switch_inline_query"
                             ]
 
+                        case _ if button.get("disabled"):
+                            btn_kwargs["disabled"] = True
+
                         case _:
                             logger.warning(
                                 (
@@ -377,6 +380,9 @@ class Utils(InlineUnit):
             screen.keyboard(*reply_markup)
             rich_html = screen
             text = None
+            # `html()` prunes the markup to leftovers - reset it, so the
+            # leftovers replace it below and no button renders twice
+            reply_markup = []
 
         screen = None
         rich_source = None
@@ -461,6 +467,7 @@ class Utils(InlineUnit):
             unit = self._units[unit_id]
 
             pending_unit_update["buttons"] = reply_markup
+            unit.pop("plain", None)
             if text is not None:
                 pending_unit_update["text"] = text
 
@@ -544,33 +551,66 @@ class Utils(InlineUnit):
                 if isinstance(reply_markup, list)
                 else unit.get("buttons", [])
             )
+            if not unit.get("rich_failed"):
+                for _ in range(2):
+                    try:
+                        await self._bot_client.edit_message(
+                            inline_message_id or chat_id,
+                            None if inline_message_id else message_id,
+                            "",
+                            rich=InputRichMessageHTML(html=rich_html),
+                            buttons=self.generate_markup(markup_rows),
+                        )
+                    except MessageNotModifiedError:
+                        commit_unit_update()
+                        return True
+                    except FloodWaitError as e:
+                        logger.info("Sleeping %ss on Telethon FloodWait...", e.seconds)
+                        await asyncio.sleep(e.seconds)
+                        continue
+                    except Exception:
+                        # Any failure of a rich edit (not just RPC errors)
+                        # degrades this edit to a plain one
+                        logger.warning(
+                            "Rich edit failed, retrying as plain",
+                            exc_info=True,
+                        )
+                        break
+                    else:
+                        commit_unit_update()
+                        return True
+
+            # Degrade: same content as a plain form, in-text taps become
+            # regular keyboard buttons
+            text, rows = self._rich_to_plain(
+                rich_source or rich_html,
+                screen.taps if screen is not None else None,
+                markup_rows,
+            )
+            commit_unit_update()
+            if unit_id is not None and unit_id in self._units:
+                self._units[unit_id].update({"text": text, "buttons": rows})
+
             try:
                 await self._bot_client.edit_message(
                     inline_message_id or chat_id,
                     None if inline_message_id else message_id,
-                    "",
-                    rich=InputRichMessageHTML(html=rich_html),
-                    buttons=self.generate_markup(markup_rows),
+                    text,
+                    parse_mode="HTML",
+                    link_preview=not disable_web_page_preview,
+                    buttons=self.generate_markup(rows),
                 )
             except MessageNotModifiedError:
-                commit_unit_update()
                 return True
-            except FloodWaitError as e:
-                logger.info("Sleeping %ss on Telethon FloodWait...", e.seconds)
-                await asyncio.sleep(e.seconds)
-                return await self._edit_unit(**utils.get_kwargs())
-            except RPCError:
-                logger.warning(
-                    "RPCError while editing rich unit, retrying as plain",
-                    exc_info=True,
-                )
+            except Exception:
+                logger.warning("Can't edit unit", exc_info=True)
                 if query:
                     with contextlib.suppress(Exception):
                         await query.answer()
-                return await self._retry_plain(unit_id, utils.get_kwargs())
-            else:
-                commit_unit_update()
-                return True
+
+                return False
+
+            return True
 
         if media is None and text is None and reply_markup:
             try:
@@ -896,6 +936,7 @@ class Utils(InlineUnit):
                 or "web_app" in button
                 or "switch_inline_query_current_chat" in button
                 or "switch_inline_query" in button
+                or button.get("disabled")
                 for button in row
             )
             for row in buttons

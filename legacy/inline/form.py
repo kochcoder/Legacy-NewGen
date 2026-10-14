@@ -15,6 +15,7 @@ import copy
 import logging
 import os
 import random
+import re
 import time
 import traceback
 import typing
@@ -26,6 +27,7 @@ from urllib.parse import urlparse
 import grapheme
 from legacytl.client.buttons import ButtonMethods
 from legacytl.errors.rpcerrorlist import ChatSendInlineForbiddenError
+from legacytl.extensions.html import CUSTOM_EMOJIS
 from legacytl.tl.types import (
     InputBotInlineMessageRichMessage,
     InputBotInlineResult,
@@ -61,6 +63,26 @@ VERIFICATION_EMOJIES = list(
 
 class Placeholder:
     """Placeholder"""
+
+
+_CUSTOM_EMOJI = re.compile(r"<(tg-emoji|emoji)\b[^>]*>(.*?)</\1>", re.S)
+
+
+def _plain_emoji(text: str) -> str:
+    """`text` with custom emoji replaced by their alt and the logo by one 🌙"""
+    logo = utils.get_platform_emoji().replace(
+        "<emoji document_id=", "<tg-emoji emoji-id="
+    ).replace("</emoji>", "</tg-emoji>")
+    return _CUSTOM_EMOJI.sub(r"\2", text.replace(logo, "🌙"))
+
+
+def _is_reply(message: Message) -> bool:
+    """Whether the message replies to another one, not just lives in a topic"""
+    reply = message.reply_to
+    return bool(
+        getattr(reply, "reply_to_msg_id", None)
+        and (not getattr(reply, "forum_topic", False) or reply.reply_to_top_id)
+    )
 
 
 class Form(InlineUnit):
@@ -134,8 +156,11 @@ class Form(InlineUnit):
             )
             return False
 
-        text = self.sanitise_text(text)
-        needs_premium_emoji_pre_edit = self._needs_premium_emoji_pre_edit(text)
+        text = self.sanitise_text(
+            text.replace("<emoji document_id=", "<tg-emoji emoji-id=").replace(
+                "</emoji>", "</tg-emoji>"
+            )
+        )
 
         if not isinstance(silent, bool):
             logger.error(
@@ -311,19 +336,23 @@ class Form(InlineUnit):
             screen = self.screen()
 
             if text:
-                screen.add(
-                    *text.replace("<emoji document_id=", "<tg-emoji emoji-id=")
-                    .replace("</emoji>", "</tg-emoji>")
-                    .splitlines()
-                )
+                screen.add(*text.splitlines())
 
             screen.keyboard(*reply_markup)
             rich_html = screen
             text = None
+            # `html()` embeds the buttons into the text and prunes the markup
+            # to the leftovers (input/web_app etc.) - reset the markup, so
+            # the leftovers replace it below and no button renders twice
+            reply_markup = []
 
         screen = None
         if rich_html is not None:
             from .screens import Screen
+
+            if any([photo, gif, file, video, audio, location]):
+                logger.error("`rich_html` can't be combined with media")
+                return False
 
             if isinstance(rich_html, Screen):
                 screen = rich_html
@@ -365,6 +394,28 @@ class Form(InlineUnit):
             else:
                 text = rich_html
 
+        # Edits of rich inline messages in groups keep custom emoji only if
+        # the message is a reply, tdlib/telegram-bot-api#880, #904. So the
+        # form replies to the command, which is deleted right after
+        anchor = bool(
+            isinstance(message, Message)
+            and self._client.legacy_me.premium
+            and CUSTOM_EMOJIS
+            and rich_html is not None
+            and (message.chat_id or 0) < 0
+            and not _is_reply(message)
+        )
+
+        # Inline results lose custom emoji, edits keep them: the form is sent
+        # with their alt text first and gets them with the next edit
+        decorate = bool(
+            self._client.legacy_me.premium
+            and CUSTOM_EMOJIS
+            and rich_html is None
+            and not any((photo, gif, file, video, location, audio))
+            and _CUSTOM_EMOJI.search(text) is not None
+        )
+
         if not reply_markup and not ttl:
             logger.debug("Patching form reply markup with empty data")
             base_reply_markup = copy.deepcopy(reply_markup) or None
@@ -377,6 +428,7 @@ class Form(InlineUnit):
                 any("callback" in button or "input" in button for button in row)
                 for row in reply_markup
             )
+            and not (screen is not None and screen.taps)
             and not ttl
         ):
             logger.debug(
@@ -387,9 +439,9 @@ class Form(InlineUnit):
 
         self._units[unit_id] = {
             "type": "form",
-            "text": text,
+            "text": _plain_emoji(text) if decorate else text,
+            **({"plain": True} if decorate else {}),
             "buttons": reply_markup,
-            "premium_emoji_pre_edit": needs_premium_emoji_pre_edit,
             "caller": message,
             "chat": None,
             "message_id": None,
@@ -407,14 +459,15 @@ class Form(InlineUnit):
             **({"message": message} if isinstance(message, Message) else {}),
             **({"force_me": force_me} if force_me else {}),
             **({"disable_security": disable_security} if disable_security else {}),
-            **({"ttl": round(time.time()) + ttl} if ttl else {}),
+            **({"ttl": round(time.time()) + (ttl or self._markup_ttl)}),
             **({"always_allow": always_allow} if always_allow else {}),
         }
 
-        if screen is not None:
+        if rich_html is not None:
             self._units[unit_id]["rich_source"] = rich_source
             self._units[unit_id]["rich_html"] = rich_html
-            self._bind_screen(unit_id, screen)
+            if screen is not None:
+                self._bind_screen(unit_id, screen, fresh=True)
 
         async def answer(msg: str):
             nonlocal message
@@ -429,17 +482,20 @@ class Form(InlineUnit):
         invoke_error = None
         invoke_tb = ""
         try:
-            m = await self._invoke_unit(unit_id, message)
+            m = await self._invoke_unit(unit_id, message, anchor=anchor)
         except ChatSendInlineForbiddenError:
+            del self._units[unit_id]
             await answer(self.translator.getkey("inline.inline403"))
+            return False
         except Exception as e:
             invoke_error = e
             invoke_tb = traceback.format_exc()
-            if screen is not None and self._rich_fallback(unit_id):
+            if self._rich_fallback(unit_id):
+                logger.warning("Can't send rich form, sending plain text: %s", e)
                 text = self._units[unit_id].get("text", text)
                 reply_markup = self._units[unit_id].get("buttons", reply_markup)
                 try:
-                    m = await self._invoke_unit(unit_id, message)
+                    m = await self._invoke_unit(unit_id, message, anchor=anchor)
                     invoke_error = None
                 except Exception as e2:
                     invoke_error = e2
@@ -472,7 +528,14 @@ class Form(InlineUnit):
 
             return False
 
-        await self._units[unit_id]["future"].wait()
+        try:
+            # The future is set when the inline message is sent; without a
+            # timeout a failed invoke would hang the form forever
+            await asyncio.wait_for(self._units[unit_id]["future"].wait(), timeout=15)
+        except asyncio.TimeoutError:
+            await self._unload_unit(unit_id)
+            return False
+
         del self._units[unit_id]["future"]
 
         self._units[unit_id]["chat"] = utils.get_chat_id(m)
@@ -486,34 +549,53 @@ class Form(InlineUnit):
             with contextlib.suppress(Exception):
                 await status_message.delete()
 
-        inline_message_id = self._units[unit_id]["inline_message_id"]
+        inline_message_id = self._units[unit_id].get("inline_message_id")
 
         msg = InlineMessage(
             inline_manager=self, unit_id=unit_id, inline_message_id=inline_message_id
         )
 
-        if (
-            needs_premium_emoji_pre_edit
-            or not isinstance(base_reply_markup, Placeholder)
-        ) and screen is None:
-            if needs_premium_emoji_pre_edit:
-                await asyncio.sleep(0.3)
-            if not await msg.edit(
+        if not isinstance(base_reply_markup, Placeholder):
+            self._units[unit_id].pop("plain", None)
+            if rich_html is not None:
                 # A rich screen is re-applied as rich, not as its html text
-                None if screen is not None else text,
-                reply_markup=(
-                    base_reply_markup
-                    if not isinstance(base_reply_markup, Placeholder)
-                    else reply_markup
-                ),
-                **({"rich_html": screen} if screen is not None else {}),
-            ):
+                success = await msg.edit(
+                    rich_html=screen or rich_html,
+                    reply_markup=base_reply_markup,
+                )
+            else:
+                success = await msg.edit(text, reply_markup=base_reply_markup)
+
+            if not success:
                 with contextlib.suppress(Exception):
                     await msg.delete()
                 await self._unload_unit(unit_id)
                 return False
+        elif decorate:
+            asyncio.ensure_future(self._decorate(unit_id, msg, text))
 
         return msg
+
+    async def _decorate(
+        self: "InlineManager",
+        unit_id: str,
+        msg: InlineMessage,
+        text: str,
+    ):
+        """Puts custom emoji into a form sent without them, unless it was edited since"""
+        if (future := self._units.get(unit_id, {}).get("future")) is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(future.wait(), timeout=15)
+
+        unit = self._units.get(unit_id)
+        if unit is None or not unit.pop("plain", False):
+            return
+
+        unit["text"] = text
+        try:
+            await msg.edit(text, reply_markup=unit["buttons"])
+        except Exception:
+            logger.debug("Can't put custom emoji into form %s", unit_id, exc_info=True)
 
     async def _form_inline_handler(self: "InlineManager", inline_query):
         try:
@@ -564,7 +646,7 @@ class Form(InlineUnit):
             return
 
         form = self._units[inline_query.query]
-        form_text = "🌙" if form.get("premium_emoji_pre_edit") else form.get("text")
+        form_text = form.get("text")
         try:
             match True:
                 case _ if form.get("rich_html") is not None:

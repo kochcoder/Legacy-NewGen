@@ -494,23 +494,33 @@ class TelethonBot:
         markup = self._build_reply_markup(reply_markup)
         text = self._emoji_text(text)
 
-        if inline_message_id is not None:
-            if rich := self._rich_upgrade(text, reply_markup):
-                # Bot message edits with buttons are upgraded to rich too
-                html, leftover = rich
+        if rich := self._rich_upgrade(text, reply_markup):
+            # Bot message edits with buttons are upgraded to rich too
+            html, leftover = rich
+            buttons = (
+                self._inline_manager.generate_markup(leftover) if leftover else None
+            )
+
+            if inline_message_id is not None:
                 inline_id = self._coerce_inline_message_id(inline_message_id)
                 return await self.client.edit_message(
                     inline_id,
                     "",
                     rich=InputRichMessageHTML(html=html),
                     link_preview=not disable_web_page_preview,
-                    buttons=(
-                        self._inline_manager.generate_markup(leftover)
-                        if leftover
-                        else None
-                    ),
+                    buttons=buttons,
                 )
 
+            return await self.client.edit_message(
+                chat_id,
+                message_id,
+                "",
+                rich=InputRichMessageHTML(html=html),
+                link_preview=not disable_web_page_preview,
+                buttons=buttons,
+            )
+
+        if inline_message_id is not None:
             inline_id = self._coerce_inline_message_id(inline_message_id)
             return await self.client.edit_message(
                 inline_id,
@@ -589,7 +599,20 @@ def make_button(
     switch_inline_query: str | None = None,
     web_app: str | dict | None = None,
     copy_text: str | None = None,
+    disabled: bool = False,
 ):
+    if disabled:
+        style_kwargs = {}
+        if style in {"primary", "danger", "success"}:
+            style_kwargs[f"bg_{style}"] = True
+        if icon is not None:
+            style_kwargs["icon"] = icon
+        return types.KeyboardInlineButton(
+            text,
+            types.InlineButtonTypeDisabled(),
+            style=types.KeyboardButtonStyle(**style_kwargs) if style_kwargs else None,
+        )
+
     if url is not None:
         return Button.url(text, url, style=style, icon=icon)
 

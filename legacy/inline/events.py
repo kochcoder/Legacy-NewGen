@@ -13,10 +13,15 @@
 import inspect
 import logging
 import re
+import time
 import typing
 from asyncio import Event
 
-from legacytl.tl.types import UpdateBotInlineSend
+from legacytl.tl.types import (
+    InputBotInlineMessageID,
+    InputBotInlineMessageID64,
+    UpdateBotInlineSend,
+)
 
 from .. import utils, security
 from .types import BotInlineCall, InlineCall, InlineQuery, InlineUnit
@@ -181,6 +186,7 @@ class Events(InlineUnit):
                 type="article",
                 title=self.sanitise_text(res["title"]),
                 description=self.sanitise_text(res.get("description")),
+                thumb=self._web_document(res.get("thumb")),
                 send_message=InputBotInlineMessageRichMessage(
                     rich_message=InputRichMessageHTML(html=html),
                     reply_markup=(
@@ -283,6 +289,11 @@ class Events(InlineUnit):
                     )
                     continue
 
+        # Game callbacks carry no data, and buttons without a callback have no
+        # `_callback_data`, so `None == None` would match them all
+        if call_data is None:
+            return
+
         for unit_id, unit in self._units.copy().items():
             for button in utils.array_sum(unit.get("buttons", [])) + list(
                 unit.get("rich_buttons") or []
@@ -324,6 +335,14 @@ class Events(InlineUnit):
                             )
                             return
 
+                    if not unit.get("inline_message_id") and isinstance(
+                        getattr(getattr(call, "query", None), "msg_id", None),
+                        (InputBotInlineMessageID, InputBotInlineMessageID64),
+                    ):
+                        # The tap carries the id, if the chosen result
+                        # never arrived
+                        unit["inline_message_id"] = call.query.msg_id
+
                     try:
                         result = await button["callback"](
                             (InlineCall if call.via_inline else BotInlineCall)(
@@ -346,41 +365,59 @@ class Events(InlineUnit):
                     return result
 
         if call_data in self._custom_map:
+            entry = self._custom_map[call_data]
+            unit_id = entry.get("unit_id")
+            unit = self._units.get(unit_id, {}) if unit_id is not None else {}
+
+            if (
+                unit_id is not None
+                and not unit
+                or (ttl := entry.get("ttl")) is not None
+                and ttl < time.time()
+            ):
+                # Stale tap of an unloaded unit or an expired unit-less tap
+                self._custom_map.pop(call_data, None)
+                return
+
+            perms_map = entry.get("perms_map") or unit.get("perms_map")
             match True:
                 case _ if (
-                    self._custom_map[call_data].get("disable_security", False)
+                    entry.get("disable_security", False)
+                    or unit.get("disable_security", False)
                     or (
-                        self._custom_map[call_data].get("force_me", False)
+                        (entry.get("force_me", False) or unit.get("force_me", False))
                         and user_id == self._me
                     )
-                    or not self._custom_map[call_data].get("force_me", False)
+                    or not (
+                        entry.get("force_me", False) or unit.get("force_me", False)
+                    )
                     and (
                         await self.check_inline_security(
-                            func=self._custom_map[call_data].get(
-                                "perms_map",
-                                lambda: self._client.dispatcher.security._default,
+                            func=(
+                                perms_map
+                                or (lambda: self._client.dispatcher.security._default)
                             )(),
                             user=user_id,
                         )
-                        if "message" in self._custom_map[call_data]
+                        if "message" in entry or "message" in unit
                         else False
                     )
                 ):
                     pass
-                case (
-                    _
-                ) if user_id not in self._client.dispatcher.security._owner and user_id not in self._custom_map[
-                    call_data
-                ].get(
-                    "always_allow", []
+                case _ if user_id not in (
+                    list(self._client.dispatcher.security._owner)
+                    + list(entry.get("always_allow") or [])
+                    + list(unit.get("always_allow") or [])
                 ):
                     await call.answer(self.translator.getkey("inline.button403"))
                     return
 
-            await self._custom_map[call_data]["handler"](
-                (InlineCall if call.via_inline else BotInlineCall)(call, self, None),
-                *self._custom_map[call_data].get("args", []),
-                **self._custom_map[call_data].get("kwargs", {}),
+            await entry["handler"](
+                (InlineCall if call.via_inline else BotInlineCall)(
+                    call, self, unit_id
+                ),
+                *entry.get("args", []),
+                **entry.get("kwargs", {}),
             )
             return
 
@@ -397,13 +434,16 @@ class Events(InlineUnit):
             return
 
         for unit_id, unit in self._units.items():
-            if (
-                unit_id == query
-                and "future" in unit
-                and isinstance(unit["future"], Event)
-            ):
-                unit["inline_message_id"] = chosen_inline_query.msg_id
-                unit["future"].set()
+            if unit_id == query:
+                # The result may arrive after the wait for it timed out
+                if chosen_inline_query.msg_id is not None and not unit.get(
+                    "inline_message_id"
+                ):
+                    unit["inline_message_id"] = chosen_inline_query.msg_id
+
+                if isinstance(unit.get("future"), Event):
+                    unit["future"].set()
+
                 return
 
         for unit_id, unit in self._units.copy().items():

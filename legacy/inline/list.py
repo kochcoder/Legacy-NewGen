@@ -163,7 +163,7 @@ class List(InlineUnit):
             "strings": strings,
             "premium_emoji_pre_edit": first_page_needs_premium_emoji_pre_edit,
             "future": asyncio.Event(),
-            **({"ttl": round(time.time()) + ttl} if ttl else {}),
+            **({"ttl": round(time.time()) + (ttl or self._markup_ttl)}),
             **({"force_me": force_me} if force_me else {}),
             **({"disable_security": disable_security} if disable_security else {}),
             **({"on_unload": on_unload} if callable(on_unload) else {}),
@@ -240,7 +240,14 @@ class List(InlineUnit):
 
             return False
 
-        await self._units[unit_id]["future"].wait()
+        try:
+            # The future is set when the inline message is sent; without a
+            # timeout a failed invoke would hang the list forever
+            await asyncio.wait_for(self._units[unit_id]["future"].wait(), timeout=15)
+        except asyncio.TimeoutError:
+            await self._unload_unit(unit_id)
+            return False
+
         del self._units[unit_id]["future"]
 
         self._units[unit_id]["chat"] = utils.get_chat_id(m)

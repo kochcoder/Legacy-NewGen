@@ -1,6 +1,7 @@
 """Rich inline screens: HTML with in-text buttons, rendered by Telegram."""
 
 import contextlib
+import functools
 import html
 import logging
 import re
@@ -11,6 +12,7 @@ from html.parser import HTMLParser
 from legacytl.extensions.html import CUSTOM_EMOJIS
 
 from .. import utils
+from .types import InlineMessage, InlineUnit
 
 if typing.TYPE_CHECKING:
     from .core import InlineManager
@@ -68,6 +70,7 @@ _ID_TO_EMOJI = {emoji_id: emoji for emoji_id, emoji, _ in ICONS.values()}
 _BLOCK = r"details|summary|table|tr|th|td|blockquote|tg-button-row|img|h[1-6]|hr|pre|ul|ol|li"
 _BLOCK_RE = re.compile(rf"\n*(</?(?:{_BLOCK})\b[^>]*>)\n*", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
+_PRE_RE = re.compile(r"(<pre\b[^>]*>.*?</pre>)", re.IGNORECASE | re.DOTALL)
 
 
 def escape(value: typing.Any) -> str:
@@ -98,8 +101,15 @@ def plural(count: int, forms: str) -> str:
 
 
 def to_rich(source: str) -> str:
-    """Line breaks of the screen source to rich HTML, blocks break lines themselves"""
-    return _BLOCK_RE.sub(r"\1", source.strip("\n")).replace("\n", "<br>")
+    """
+    Line breaks of the screen source to rich HTML, blocks break lines themselves.
+    Telegram drops <br> inside <pre>, so line breaks stay as they are there
+    """
+    parts = _PRE_RE.split(_BLOCK_RE.sub(r"\1", source.strip("\n")))
+    return "".join(
+        part if index % 2 else part.replace("\n", "<br>")
+        for index, part in enumerate(parts)
+    )
 
 
 def strip_tags(text: str) -> str:
@@ -175,14 +185,10 @@ class _Plain(HTMLParser):
             case "details":
                 self.flush()
                 self.newline()
-                shown = not any(self.quotes)
-                self.quotes.append(shown)
-                if shown:
-                    self.emit(
-                        "<blockquote expandable>"
-                        if "expandable" in keys
-                        else "<blockquote>"
-                    )
+                # The quote opens only after the summary, so it doesn't
+                # swallow the title line
+                self.details.append("open" in keys)
+                self.quotes.append(False)
             case "summary":
                 self.summary = len(self.out)
             case "blockquote":
@@ -553,11 +559,20 @@ class Screen:
         self, callback: typing.Callable, *args, kwargs: typing.Optional[dict] = None
     ) -> dict:
         return self.button(
-            self.t("screen_back", "Back"), callback, *args, icon="back", kwargs=kwargs
+            self.t("screen_back", "Back"),
+            callback,
+            *args,
+            icon="back",
+            kwargs=kwargs,
+            _nav=True,
         )
 
     def close(self) -> dict:
-        return {**self.key(self.t("screen_close", "Close"), "close"), "action": "close"}
+        return {
+            **self.key(self.t("screen_close", "Close"), "close"),
+            "action": "close",
+            "_nav": True,
+        }
 
     def footer(
         self,
@@ -585,18 +600,19 @@ class Screen:
 
         def move(label: str, target: int) -> dict:
             if not 0 <= target < pages:
-                return self.label("·")
+                return {**self.label("·"), "_nav": True}
 
             return {
                 "text": label,
                 "callback": callback,
                 "args": args,
                 "kwargs": {**kwargs, "page": target},
+                "_nav": True,
             }
 
         return [
             move("‹", page - 1),
-            self.label(f"{page + 1} / {pages}"),
+            {**self.label(f"{page + 1} / {pages}"), "_nav": True},
             move("›", page + 1),
         ]
 
@@ -637,15 +653,35 @@ class Screen:
         """
         style = button.get("style")
 
+        # Module authors can put anything into `style` - unknown values are
+        # dropped, not crashed on
+        if style is not None and style not in STYLES:
+            style = None
+
+        # In-text taps are link-styled by default; module styles win, action
+        # buttons (close/back) stay neutral
+        if style is None and "action" not in button and (
+            "callback" in button or "url" in button
+        ):
+            style = "link"
+
         def _label() -> str:
             mark = ""
             emoji_id = button.get("emoji_id")
-            if emoji_id and self.premium:
+            if emoji_id:
+                colored = style in {"primary", "success", "danger"}
                 try:
                     fallback = _ID_TO_EMOJI.get(int(emoji_id), "▫️")
                 except (TypeError, ValueError):
                     fallback = "▫️"
-                mark = f'<tg-emoji emoji-id="{attr(emoji_id)}">{fallback}</tg-emoji>'
+
+                if self.premium and not colored:
+                    mark = f'<tg-emoji emoji-id="{attr(emoji_id)}">{fallback}</tg-emoji>'
+                else:
+                    # Telegram recolors the whole colored button, a custom
+                    # emoji would be invisible there
+                    mark = fallback
+
             return f"{mark} {escape(str(button.get('text', '·')))}".strip()
 
         def _styled(tag_type: str, **attrs: str) -> str:
@@ -688,7 +724,8 @@ class Screen:
         """
         Moves keyboard buttons into the message text as rich buttons, so
         every screen renders them in-text instead of a bottom keyboard.
-        Buttons requiring the keyboard flow are kept on the markup.
+        Buttons requiring the keyboard flow (`input`, web apps) and
+        navigation (`_nav`: pager, back, close) are kept on the markup.
         Idempotent: embedded rows are pruned
         """
         if self._keyboard_embedded:
@@ -701,7 +738,10 @@ class Screen:
             embedded = []
             kept = []
             for button in row:
-                if (button_html := self._dict_button_html(button)) is not None:
+                if button.get("_nav"):
+                    # Navigation stays on the bottom keyboard
+                    kept += [{k: v for k, v in button.items() if k != "_nav"}]
+                elif (button_html := self._dict_button_html(button)) is not None:
                     embedded += [button_html]
                 else:
                     kept += [button]
@@ -725,7 +765,7 @@ class Screen:
         return to_plain(self._embed_keyboard().source, self.taps)
 
 
-class Screens:
+class Screens(InlineUnit):
     """Rich screens mixin for InlineManager (see Screen)."""
 
     def screen(self: "InlineManager") -> Screen:
@@ -751,8 +791,6 @@ class Screens:
             if not button.get("message"):
                 return None
 
-            import functools
-
             return functools.partial(
                 self._answer_unit_handler,
                 show_alert=button.get("show_alert", False),
@@ -775,6 +813,9 @@ class Screens:
 
     def _has_embeddable_buttons(self: "InlineManager", markup: typing.Any) -> bool:
         """Checks whether a dict markup holds buttons, which can live in text"""
+        if isinstance(markup, dict):
+            markup = [[markup]]
+
         if not isinstance(markup, list):
             return False
 
@@ -788,16 +829,11 @@ class Screens:
 
     async def show(self: "InlineManager", call: typing.Any, screen: Screen) -> bool:
         """Edit the unit of `call` to `screen` and answer with its toast"""
-
-        async def answer():
-            if getattr(call, "data", None) is not None and hasattr(call, "answer"):
-                with contextlib.suppress(Exception):
-                    await call.answer(
-                        screen.toast or None, show_alert=screen.alert or None
-                    )
-
         result = await call.edit(rich_html=screen)
-        await answer()
+        if getattr(call, "data", None) is not None and hasattr(call, "answer"):
+            with contextlib.suppress(Exception):
+                await call.answer(screen.toast or None, show_alert=screen.alert or None)
+
         return result
 
     def _bind_screen(
@@ -819,11 +855,18 @@ class Screens:
             self._custom_map[tap["_callback_data"]] = {
                 "handler": tap["callback"],
                 "always_allow": tap.get("always_allow", []),
-                "args": tap.get("args", {}),
+                "args": tap.get("args", []),
                 "kwargs": tap.get("kwargs", {}),
                 "force_me": tap.get("force_me", False),
                 "disable_security": tap.get("disable_security", False),
                 "unit_id": unit_id,
+                # Unit-less taps (inline results, bot messages) have no unit
+                # to anchor their lifetime to — they expire with the markup
+                **(
+                    {"ttl": round(time.time()) + self._markup_ttl}
+                    if unit_id is None
+                    else {}
+                ),
             }
 
         if unit is not None:
@@ -873,8 +916,6 @@ class Screens:
 
             with contextlib.suppress(Exception):
                 await message.delete()
-
-            from .types import InlineMessage
 
             call = InlineMessage(self, unit_id, unit.get("inline_message_id"))
             try:
