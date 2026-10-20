@@ -390,7 +390,7 @@ class TestMod(loader.Module):
             utils.get_version_raw(),
             (
                 " <a"
-                f' href="https://github.com/ziwupa/Legacy-NewGen/commit/{ghash}">@{ghash[:8]}</a>'
+                f' href="https://github.com/kochcoder/Legacy-NewGen/commit/{ghash}">@{ghash[:8]}</a>'
                 if ghash
                 else ""
             ),

@@ -206,8 +206,8 @@ settings:
   railway: "🚂 Railway"
   railway_install: "🌙 <b>Встановлення на 🚂 RailWay:</b>\n\n<b>Посилання для встановлення:</b>\nhttps://railway.com/template/47hYUn?referralCode=PvevLV\n\n<i><u>Будьте обережні! Будь-які користувацькі боти офіційно заборонені на RailWay, якщо ваш обліковий запис буде заблоковано, ні творець, ні інші люди не несуть за це відповідальності.</u></i>"
   main_menu: "◀ Вибрати іншу платформу"
-  vds_install: "<b>🚀 Legacy — Запуск та аргументи командного рядка</b>\n\n<b>🌙 Встановлення на 💎 VDS</b>\n<pre><code class='language-bash'>sudo apt update &amp;&amp; sudo apt upgrade -y &amp;&amp; sudo apt install git python3-pip &amp;&amp; git clone https://github.com/ziwupa/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; export AIOHTTP_NO_EXTENSIONS=1 &amp;&amp; pip install -r requirements.txt &amp;&amp; python3 -m legacy</code></pre>\n\n<b><i>⚡️ Якщо у вас немає доступу </i></b><code>sudo</code><b><i> просто пропустіть перші кроки.</i></b>\n\n<b>⚙️ Доступні аргументи</b>\n\n<code>--bot-token</code> або <code>-bt &lt;token&gt;</code> Вказати токен вашого inline бота напряму.\n<code>--no-web</code> Запустити Legacy <b>безпосередньо в терміналі</b> замість використання веб-посилання для входу.\n<code>--root</code> Дозволити запуск Legacy від імені root (вимикає попередження безпеки).\n<code>--no-tty</code> Вимкнути кольоровий ANSI вивід (лише звичайний текст)."
-  docker_install: "<b>🐳 Legacy — Посібник з встановлення Docker</b>\n\n<b>🌙 Збірка образу:</b>\n<pre><code class='language-bash'>git clone https://github.com/ziwupa/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; sudo docker build . -t ziwupa/legacy-newgen:latest</code></pre>\n<b>🚀 Запуск контейнера:</b>\n<pre><code class='language-bash'>sudo docker run --restart=unless-stopped --name &lt;container name&gt; -p &lt;port&gt;:8080 --detach -it ziwupa/legacy-newgen:latest</code></pre>\n\n<code>--restart=unless-stopped</code> автоматично перезапускає контейнер, якщо він не був зупинений вручну.\n<code>--name &lt;container_name&gt;</code> встановити власне ім'я для вашого контейнера  \n<code>-p &lt;port&gt;:8080</code> прив'язати Legacy до потрібного порту на хості  \n<code>--detach -it</code> запустити у фоновому режимі з включеним інтерактивним режимом"
+  vds_install: "<b>🚀 Legacy — Запуск та аргументи командного рядка</b>\n\n<b>🌙 Встановлення на 💎 VDS</b>\n<pre><code class='language-bash'>sudo apt update &amp;&amp; sudo apt upgrade -y &amp;&amp; sudo apt install git python3-pip &amp;&amp; git clone https://github.com/kochcoder/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; export AIOHTTP_NO_EXTENSIONS=1 &amp;&amp; pip install -r requirements.txt &amp;&amp; python3 -m legacy</code></pre>\n\n<b><i>⚡️ Якщо у вас немає доступу </i></b><code>sudo</code><b><i> просто пропустіть перші кроки.</i></b>\n\n<b>⚙️ Доступні аргументи</b>\n\n<code>--bot-token</code> або <code>-bt &lt;token&gt;</code> Вказати токен вашого inline бота напряму.\n<code>--no-web</code> Запустити Legacy <b>безпосередньо в терміналі</b> замість використання веб-посилання для входу.\n<code>--root</code> Дозволити запуск Legacy від імені root (вимикає попередження безпеки).\n<code>--no-tty</code> Вимкнути кольоровий ANSI вивід (лише звичайний текст)."
+  docker_install: "<b>🐳 Legacy — Посібник з встановлення Docker</b>\n\n<b>🌙 Збірка образу:</b>\n<pre><code class='language-bash'>git clone https://github.com/kochcoder/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; sudo docker build . -t kochcoder/legacy-newgen:latest</code></pre>\n<b>🚀 Запуск контейнера:</b>\n<pre><code class='language-bash'>sudo docker run --restart=unless-stopped --name &lt;container name&gt; -p &lt;port&gt;:8080 --detach -it kochcoder/legacy-newgen:latest</code></pre>\n\n<code>--restart=unless-stopped</code> автоматично перезапускає контейнер, якщо він не був зупинений вручну.\n<code>--name &lt;container_name&gt;</code> встановити власне ім'я для вашого контейнера  \n<code>-p &lt;port&gt;:8080</code> прив'язати Legacy до потрібного порту на хості  \n<code>--detach -it</code> запустити у фоновому режимі з включеним інтерактивним режимом"
   close_btn: "🔻 Закрити"
   too_many_args: "<emoji document_id=5210952531676504517>🚫</emoji> <bЗанадто багато аргументів</b>"
   blacklisted: "<emoji document_id=5197474765387864959>👍</emoji> <b>Чат {} додано до чорного списку юзербота</b>"
@@ -231,7 +231,7 @@ settings:
     <blockquote><emoji document_id=5217890643321300022>✈️</emoji><b> Legacy-Tl-New:</b> {}
     <emoji document_id=5289608677244811430>📁</emoji> <b>Python:</b> {}</blockquote>
     <blockquote><emoji document_id=5316692281451887373>⭐️</emoji> <b>Особлива подяка</b></blockquote>
-    <blockquote>@ziwupa — розробник Legacy newgen
+    <blockquote>@kochcoder — розробник Legacy newgen
     @xdesai — виправлення, функції, оптимізація
     @undef1nn3d — виправлення, функції, оптимізація
     @Admt_450 — пошук помилок
@@ -296,7 +296,7 @@ inline_stuff:
   bot_username_invalid: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Неправильний нік бота. Він має закінчитися на</b> <code>bot</code> <b>і бути не коротше ніж 5 символів</b>"
   bot_username_occupied: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Такий нік бота вже зайнятий</b>"
   bot_updated: "<emoji document_id=6318792204118656433>🎉</emoji> <b>Налаштування збережені. Для їх застосування треба перезавантажити юзербота</b>"
-  this_is_legacy: "🌙 <b>Привіт! Це Legacy — потужний модульний Telegram юзербот. Ви можете встановити його на свій акаунт!</b>\n\n<b>🌍 <a href=\"https://github.com/ziwupa/Legacy-NewGen\">GitHub</a></b>\n<b>👥 <a href=\"https://t.me/LegacyNewgensSupport\">Чат підтримки</a></b>"
+  this_is_legacy: "🌙 <b>Привіт! Це Legacy — потужний модульний Telegram юзербот. Ви можете встановити його на свій акаунт!</b>\n\n<b>🌍 <a href=\"https://github.com/kochcoder/Legacy-NewGen\">GitHub</a></b>\n<b>👥 <a href=\"https://t.me/LegacyNewgensSupport\">Чат підтримки</a></b>"
   token_not_provided: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Токен бота не вказано</b>"
   token_changed: "<emoji document_id=5427009714745517609>✅</emoji> <b>Токен бота змінено."
   invalid_token_format: "<emoji document_id=5240241223632954241>🚫</emoji> <b>Невірний токен!</b>"
@@ -368,7 +368,7 @@ updater:
   btn_restart: "🔄 Перезавантаження"
   btn_update: "🧭 Оновитися"
   restart_confirm: "❓ <b>Ти впевнений, що хочеш перезавантажитися?</b>"
-  update_confirm: "❓ <b>Ти впевнений, що хочеш оновитися?\n\n<a href=\"https://github.com/ziwupa/Legacy-NewGen/commit/{}\">{}</a> ⤑ <a href=\"https://github.com/ziwupa/Legacy-NewGen/commit/{}\">{}</a></b>"
+  update_confirm: "❓ <b>Ти впевнений, що хочеш оновитися?\n\n<a href=\"https://github.com/kochcoder/Legacy-NewGen/commit/{}\">{}</a> ⤑ <a href=\"https://github.com/kochcoder/Legacy-NewGen/commit/{}\">{}</a></b>"
   no_update: "🚸 <b>У тебе остання версія. Оновитися примусово?</b>"
   cancel: "🚫 Скасувати"
   _cls_doc: "Оновлює юзербот"

@@ -85,9 +85,9 @@ BASE_DIR = (
 )
 
 BASE_PATH = Path(BASE_DIR)
-ASSETS_PATH = "https://raw.githubusercontent.com/ziwupa/Legacy-NewGen/refs/heads/beta/assets/legacy-assets.png"
-BACKUPS_PATH = "https://raw.githubusercontent.com/ziwupa/Legacy-NewGen/refs/heads/beta/assets/legacy-backups.png"
-LOGS_PATH = "https://raw.githubusercontent.com/ziwupa/Legacy-NewGen/refs/heads/beta/assets/legacy-logs.png"
+ASSETS_PATH = "https://raw.githubusercontent.com/kochcoder/Legacy-NewGen/refs/heads/beta/assets/legacy-assets.png"
+BACKUPS_PATH = "https://raw.githubusercontent.com/kochcoder/Legacy-NewGen/refs/heads/beta/assets/legacy-backups.png"
+LOGS_PATH = "https://raw.githubusercontent.com/kochcoder/Legacy-NewGen/refs/heads/beta/assets/legacy-logs.png"
 AVATAR_PATH = os.path.join(os.getcwd(), "assets", "legacy-pfp.png")
 CONFIG_PATH = BASE_PATH / "config.json"
 SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")
@@ -914,7 +914,7 @@ class Legacy:
                 "https://i.postimg.cc/13x4nnxm/41-9-D6-DF8-E.gif",
                 caption=(
                     "🌙 <b>Legacy started!</b>\n"
-                    '⚙ <b>GitHub commit SHA: <a href="https://github.com/ziwupa/Legacy-NewGen/commit/{}">{}</a></b>\n'
+                    '⚙ <b>GitHub commit SHA: <a href="https://github.com/kochcoder/Legacy-NewGen/commit/{}">{}</a></b>\n'
                     "🔎 <b>Update status: {}</b>\n<b>{}</b>"
                 ).format(
                     build,

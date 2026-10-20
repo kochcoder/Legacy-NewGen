@@ -9,9 +9,9 @@
 # Do not delete this file, it will cause errors.
 
 __author__ = "Legacy NewGen contributors"
-__contact__ = "https://t.me/ziwupa"
+__contact__ = "https://t.me/kochcoder"
 __copyright__ = "Copyright Legacy NewGen contributors"
-__credits__ = ["LonamiWebs", "penn5", "ziwupa"]
+__credits__ = ["LonamiWebs", "penn5", "kochcoder"]
 __license__ = "AGPLv3"
-__maintainer__ = "@ziwupa"
+__maintainer__ = "@kochcoder"
 __status__ = "Production"

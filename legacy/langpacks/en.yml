@@ -219,8 +219,8 @@ settings:
   railway: "🚂 Railway"
   railway_install: "🌙 <b>Installation on 🚂 RailWay:</b>\n\n<b>Installation link:</b>\nhttps://railway.com/template/47hYUn?referralCode=PvevLV\n\n<i><u>Be careful! Any userbots are officially banned on RailWay, if your account is banned, neither the creator nor other people are to blame for this.</u></i>"
   main_menu: "◀ Choose another platform"
-  vds_install: "<b>🚀 Legacy — Launch &amp; Command-Line Arguments</b>\n\n<b>🌙 Installation on 💎 VDS</b>\n<pre><code class='language-bash'>sudo apt update &amp;&amp; sudo apt upgrade -y &amp;&amp; sudo apt install git python3-pip &amp;&amp; git clone https://github.com/ziwupa/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; export AIOHTTP_NO_EXTENSIONS=1 &amp;&amp; pip install -r requirements.txt &amp;&amp; python3 -m legacy</code></pre>\n\n<b><i>⚡️ If you don’t have </i></b><code>sudo</code><b><i> access, just skip the initial steps.</i></b>\n\n<b>⚙️ Available Arguments</b>\n\n<code>--bot-token</code> or <code>-bt &lt;token&gt;</code> Provide your inline bot token directly.\n<code>--no-web</code> Run Legacy <b>directly in terminal</b> instead of using a web link for login.\n<code>--root</code> Allows running Legacy as root (disables security warnings).\n<code>--no-tty</code> Disable colorful ANSI output (plain text only)."
-  docker_install: "<b>🐳 Legacy — Docker Installation Guide</b>\n\n<b>🌙 Build the image:</b>\n<pre><code class='language-bash'>git clone https://github.com/ziwupa/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; sudo docker build . -t ziwupa/legacy-newgen:latest</code></pre>\n<b>🚀 Run the container:</b>\n<pre><code class='language-bash'>sudo docker run --restart=unless-stopped --name &lt;container name&gt; -p &lt;port&gt;:8080 --detach -it ziwupa/legacy-newgen:latest</code></pre>\n\n<code>--restart=unless-stopped</code> automatically restarts the container unless it’s stopped manually.\n<code>--name &lt;container_name&gt;</code> set a custom name for your container  \n<code>-p &lt;port&gt;:8080</code> bind Legacy to your desired port on the host  \n<code>--detach -it</code> run in background, interactive mode enabled"
+  vds_install: "<b>🚀 Legacy — Launch &amp; Command-Line Arguments</b>\n\n<b>🌙 Installation on 💎 VDS</b>\n<pre><code class='language-bash'>sudo apt update &amp;&amp; sudo apt upgrade -y &amp;&amp; sudo apt install git python3-pip &amp;&amp; git clone https://github.com/kochcoder/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; export AIOHTTP_NO_EXTENSIONS=1 &amp;&amp; pip install -r requirements.txt &amp;&amp; python3 -m legacy</code></pre>\n\n<b><i>⚡️ If you don’t have </i></b><code>sudo</code><b><i> access, just skip the initial steps.</i></b>\n\n<b>⚙️ Available Arguments</b>\n\n<code>--bot-token</code> or <code>-bt &lt;token&gt;</code> Provide your inline bot token directly.\n<code>--no-web</code> Run Legacy <b>directly in terminal</b> instead of using a web link for login.\n<code>--root</code> Allows running Legacy as root (disables security warnings).\n<code>--no-tty</code> Disable colorful ANSI output (plain text only)."
+  docker_install: "<b>🐳 Legacy — Docker Installation Guide</b>\n\n<b>🌙 Build the image:</b>\n<pre><code class='language-bash'>git clone https://github.com/kochcoder/Legacy-NewGen &amp;&amp; cd Legacy &amp;&amp; sudo docker build . -t kochcoder/legacy-newgen:latest</code></pre>\n<b>🚀 Run the container:</b>\n<pre><code class='language-bash'>sudo docker run --restart=unless-stopped --name &lt;container name&gt; -p &lt;port&gt;:8080 --detach -it kochcoder/legacy-newgen:latest</code></pre>\n\n<code>--restart=unless-stopped</code> automatically restarts the container unless it’s stopped manually.\n<code>--name &lt;container_name&gt;</code> set a custom name for your container  \n<code>-p &lt;port&gt;:8080</code> bind Legacy to your desired port on the host  \n<code>--detach -it</code> run in background, interactive mode enabled"
   close_btn: "🔻 Close"
   too_many_args: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Too many args</b>"
   blacklisted: "<emoji document_id=5197474765387864959>👍</emoji> <b>Chat {} blacklisted from userbot</b>"
@@ -244,7 +244,7 @@ settings:
     <blockquote><b><emoji document_id=5217890643321300022>✈️</emoji> <b>Legacy-Tl-New:</b> <i>{}</i>
     <emoji document_id=5289608677244811430>📁</emoji> <b>Python:</b> <i>{}</i></blockquote>
     <blockquote><emoji document_id=5316692281451887373>⭐️</emoji> <b>Special thanks</b></blockquote>
-    <blockquote>@ziwupa — Legacy newgen maintainer
+    <blockquote>@kochcoder — Legacy newgen maintainer
     @xdesai — Fixes, features, optimization
     @undef1nn3d — Fixes, features, design
     @Admt_450 — Bug hunting
@@ -311,7 +311,7 @@ inline_stuff:
   bot_username_invalid: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Specified bot username is invalid. It must end with</b> <code>bot</code> <b>and contain at least 4 symbols</b>"
   bot_username_occupied: "<emoji document_id=5210952531676504517>🚫</emoji> <b>This username is already occupied</b>"
   bot_updated: "<emoji document_id=6318792204118656433>🎉</emoji> <b>Config successfully saved. Restart userbot to apply changes</b>"
-  this_is_legacy: "🌙 <b>Hi! This is Legacy — powerful modular Telegram userbot. You can install it to your account!</b>\n\n<b>🌍 <a href=\"https://github.com/ziwupa/Legacy-NewGen\">GitHub</a></b>\n<b>👥 <a href=\"https://t.me/LegacyNewgensSupport\">Support chat</a></b>"
+  this_is_legacy: "🌙 <b>Hi! This is Legacy — powerful modular Telegram userbot. You can install it to your account!</b>\n\n<b>🌍 <a href=\"https://github.com/kochcoder/Legacy-NewGen\">GitHub</a></b>\n<b>👥 <a href=\"https://t.me/LegacyNewgensSupport\">Support chat</a></b>"
   token_not_provided: "<emoji document_id=5210952531676504517>🚫</emoji> <b>Bot token not provided</b>"
   invalid_token_format: "<emoji document_id=5240241223632954241>🚫</emoji> <b>Invalid token!</b>"
   token_changed: "<emoji document_id=5427009714745517609>✅</emoji> <b>Bot token changed.</b>"
@@ -386,7 +386,7 @@ updater:
   btn_restart: "🔄 Restart"
   btn_update: "🧭 Update"
   restart_confirm: "❓ <b>Are you sure you want to restart?</b>"
-  update_confirm: "❓ <b>Are you sure you want to update?\n\n<a href=\"https://github.com/ziwupa/Legacy-NewGen/commit/{}\">{}</a> ⤑ <a href=\"https://github.com/ziwupa/Legacy-NewGen/commit/{}\">{}</a></b>"
+  update_confirm: "❓ <b>Are you sure you want to update?\n\n<a href=\"https://github.com/kochcoder/Legacy-NewGen/commit/{}\">{}</a> ⤑ <a href=\"https://github.com/kochcoder/Legacy-NewGen/commit/{}\">{}</a></b>"
   no_update: "🚸 <b>You are on the latest version, pull updates anyway?</b>"
   cancel: "🚫 Cancel"
   full_success: "<emoji document_id=5408909562919007848>✅</emoji> <b>Userbot is fully loaded! {}</b>\n<i>Full restart took {}s</i>"

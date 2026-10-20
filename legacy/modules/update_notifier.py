@@ -106,7 +106,7 @@ class UpdateNotifier(loader.Module):
                 "https://i.postimg.cc/1RWpKs8z/legacy-update-banner.png",
                 caption=self.strings("update_required").format(
                     base[:6] if isinstance(base, str) else base,
-                    '<a href="https://github.com/ziwupa/Legacy-NewGen/compare/{}...{}">{}</a>'.format(
+                    '<a href="https://github.com/kochcoder/Legacy-NewGen/compare/{}...{}">{}</a>'.format(
                         base[:12] if isinstance(base, str) else base,
                         self.get_latest()[:12],
                         self.get_latest()[:6],
